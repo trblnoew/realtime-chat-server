@@ -70,12 +70,6 @@ npm run start:dev
   - 현재 활성 DM은 unread 0으로 처리
   - 읽음 시점 저장 로직 보강(`sentAt` 기반)
 
-## 검증 체크리스트
-1. 로그인 후 `/a/:roomId`, `/b/:peerUserId` 새로고침 시 화면 복원
-2. RT 초대 알람 `Y/N` 정상 동작
-3. A/B 모두 스크롤 위에서 새 메시지 수신 시 `Jump Latest` 동작
-4. B 활성 DM에서 좌측 unread가 고정 `1`로 남지 않는지 확인
-
 ## 참고
 - 빌드/타입체크:
 ```bash
