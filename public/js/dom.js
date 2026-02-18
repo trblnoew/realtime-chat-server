@@ -1,0 +1,72 @@
+function byId(id) {
+  return document.getElementById(id);
+}
+
+export const elements = {
+  shell: byId('shell'),
+  rtBtn: byId('rtBtn'),
+  aBtn: byId('aBtn'),
+  bBtn: byId('bBtn'),
+
+  authCard: byId('authCard'),
+  authUserIdInput: byId('authUserIdInput'),
+  signupBtn: byId('signupBtn'),
+  loginBtn: byId('loginBtn'),
+  logoutBtn: byId('logoutBtn'),
+  authMessage: byId('authMessage'),
+  sessionUserLabel: byId('sessionUserLabel'),
+
+  rtBadge: byId('rtBadge'),
+  inviteAlarmList: byId('inviteAlarmList'),
+  inviteAlarmEmpty: byId('inviteAlarmEmpty'),
+
+  status: byId('status'),
+  userId: byId('userId'),
+  socialStatus: byId('socialStatus'),
+  onlineUsers: byId('onlineUsers'),
+  onlineCount: byId('onlineCount'),
+
+  currentRoom: byId('currentRoom'),
+  chatRoomTitle: byId('chatRoomTitle'),
+  roomList: byId('roomList'),
+  refreshRoomsBtn: byId('refreshRoomsBtn'),
+
+  messages: byId('messages'),
+  text: byId('text'),
+  send: byId('send'),
+  pickFileBtn: byId('pickFileBtn'),
+  fileInput: byId('fileInput'),
+  selectedFileLabel: byId('selectedFileLabel'),
+  jumpLatest: byId('jumpLatest'),
+
+  bFriendList: byId('bFriendList'),
+  bDmList: byId('bDmList'),
+  bDmSearchInput: byId('bDmSearchInput'),
+  bDrawerToggle: byId('bDrawerToggle'),
+  bDrawerBackdrop: byId('bDrawerBackdrop'),
+  bChatTitle: byId('bChatTitle'),
+  bStatus: byId('bStatus'),
+  bMessages: byId('bMessages'),
+  bJumpLatest: byId('bJumpLatest'),
+  bText: byId('bText'),
+  bSend: byId('bSend'),
+  bPickFileBtn: byId('bPickFileBtn'),
+  bFileInput: byId('bFileInput'),
+  bSelectedFileLabel: byId('bSelectedFileLabel'),
+  aActionBtn: byId('aActionBtn'),
+  bActionBtn: byId('bActionBtn'),
+
+  actionModal: byId('actionModal'),
+  actionCloseBtn: byId('actionCloseBtn'),
+  actionCancelBtn: byId('actionCancelBtn'),
+  actionSubmitBtn: byId('actionSubmitBtn'),
+  actionTabs: byId('actionTabs'),
+  actionError: byId('actionError'),
+  actionFriendIdInput: byId('actionFriendIdInput'),
+  actionRoomIdInput: byId('actionRoomIdInput'),
+  actionInviteRoomInput: byId('actionInviteRoomInput'),
+  actionInviteToInput: byId('actionInviteToInput'),
+  actionPanelFriend: byId('actionPanelFriend'),
+  actionPanelRoom: byId('actionPanelRoom'),
+  actionPanelInvite: byId('actionPanelInvite'),
+};

@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Realtime Chat MVP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #2b2d31;
+        --panel: #313338;
+        --panel-2: #1e1f22;
+        --panel-3: #232428;
+        --line: #3d3f45;
+        --text: #f2f3f5;
+        --muted: #b5bac1;
+        --accent: #5865f2;
+        --danger: #ef4444;
+        --mine: #3b5ea6;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: 'Space Grotesk', sans-serif;
+        background: radial-gradient(circle at top, #3b3f47 0%, #1f2125 58%);
+        color: var(--text);
+      }
+      .shell {
+        width: min(1400px, 96vw);
+        height: 94vh;
+        margin: 2vh auto;
+        border-radius: 14px;
+        overflow: hidden;
+        border: 1px solid #40434a;
+        background: var(--bg);
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.32);
+        display: grid;
+        grid-template-columns: 72px 270px 1fr 300px;
+      }
+      .shell.mode-rt {
+        grid-template-columns: 72px 1fr;
+      }
+      .shell.mode-a .b-workspace,
+      .shell.mode-rt .b-workspace {
+        display: none;
+      }
+      .shell.mode-b {
+        grid-template-columns: 72px 1fr;
+      }
+      .shell.mode-b .channels,
+      .shell.mode-b .chat-col,
+      .shell.mode-b .member-col {
+        display: none;
+      }
+      .rail {
+        background: #111214;
+        border-right: 1px solid #2a2c30;
+        padding: 12px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        align-items: center;
+      }
+      .guild-dot {
+        position: relative;
+        width: 48px;
+        height: 48px;
+        border-radius: 16px;
+        border: 0;
+        color: #fff;
+        background: #35373d;
+        font-weight: 700;
+      }
+      .guild-dot.active {
+        background: var(--accent);
+        border-radius: 14px;
+      }
+      .rt-view {
+        display: none;
+        flex-direction: column;
+        gap: 14px;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(180deg, #2f3238, #26282d);
+        color: #c5cbd6;
+        font-size: 1.1rem;
+        letter-spacing: 0.04em;
+      }
+      .shell.mode-rt .rt-view {
+        display: flex;
+      }
+      .rt-card {
+        width: min(640px, 90%);
+        border: 1px solid #4b4f58;
+        border-radius: 12px;
+        background: #202227;
+        padding: 12px;
+      }
+      .rt-card h3 {
+        margin: 0 0 8px;
+        font-size: 0.9rem;
+      }
+      .alarm-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 6px;
+        max-height: 240px;
+        overflow-y: auto;
+      }
+      .alarm-item {
+        border: 1px solid #525767;
+        background: #2a2d37;
+        border-radius: 8px;
+        padding: 8px;
+        font-size: 0.8rem;
+      }
+      .alarm-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .alarm-actions {
+        display: inline-flex;
+        gap: 6px;
+      }
+      .alarm-btn {
+        min-width: 28px;
+        min-height: 24px;
+        border-radius: 6px;
+        border: 1px solid #4a4d55;
+        background: #22242b;
+        color: var(--text);
+        font: inherit;
+        font-size: 0.72rem;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .alarm-btn.accept {
+        border-color: #4c70ba;
+        background: #25437f;
+      }
+      .alarm-btn.reject {
+        border-color: #6d3d4a;
+        background: #492732;
+      }
+      .alarm-meta {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+      .auth-card {
+        width: min(420px, 90%);
+        border: 1px solid #4b4f58;
+        border-radius: 12px;
+        background: #202227;
+        padding: 12px;
+      }
+      .auth-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .auth-message {
+        margin-top: 8px;
+        font-size: 0.78rem;
+        color: #c6cbde;
+      }
+      .badge {
+        position: absolute;
+        top: -3px;
+        right: -3px;
+        min-width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        border: 1px solid #4e1340;
+        background: #ff4fb8;
+        color: #1d0820;
+        font-size: 0.68rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 5px;
+      }
+      .shell.mode-rt .channels,
+      .shell.mode-rt .chat-col,
+      .shell.mode-rt .member-col,
+      .shell.mode-rt .b-workspace {
+        display: none;
+      }
+      .b-workspace {
+        display: grid;
+        grid-column: 2 / -1;
+        grid-template-columns: 280px 1fr;
+        min-height: 0;
+        position: relative;
+      }
+      .b-left {
+        background: var(--panel-2);
+        border-right: 1px solid #24262a;
+        padding: 10px;
+        overflow-y: auto;
+      }
+      .b-left-head {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      .b-search {
+        margin: 8px 0;
+      }
+      #bFriendsSection {
+        display: none;
+      }
+      .b-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 6px;
+      }
+      .b-dm-item {
+        width: 100%;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #2a2d33;
+        color: var(--text);
+        padding: 7px 8px;
+        text-align: left;
+        cursor: pointer;
+      }
+      .b-dm-item.active {
+        border-color: #6e79ff;
+        background: #383c4a;
+      }
+      .b-dm-main {
+        font-size: 0.8rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .b-dm-sub {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 0.72rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .b-unread {
+        min-width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        padding: 0 6px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--accent);
+        color: #fff;
+        font-size: 0.68rem;
+        font-weight: 700;
+      }
+      .head-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .head-action-btn {
+        min-height: 32px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #2a2d33;
+        color: var(--text);
+        padding: 0 10px;
+        font: inherit;
+        font-size: 0.75rem;
+        cursor: pointer;
+      }
+      .b-chat-col {
+        min-width: 0;
+        min-height: 0;
+        overflow: hidden;
+        display: grid;
+        grid-template-rows: 56px 1fr auto;
+        background: var(--panel);
+      }
+      .b-head-left {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .b-drawer-toggle {
+        display: none;
+        min-width: 32px;
+        min-height: 32px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #272a31;
+        color: var(--text);
+        cursor: pointer;
+      }
+      .b-drawer-backdrop {
+        display: none;
+      }
+      .channels {
+        background: var(--panel-2);
+        border-right: 1px solid #24262a;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .server-head {
+        padding: 14px 14px 12px;
+        border-bottom: 1px solid #24262a;
+      }
+      .server-head h1 { margin: 0; font-size: 0.95rem; }
+      .status { margin-top: 6px; font-size: 0.75rem; color: var(--muted); }
+      .name-editor {
+        margin-top: 10px;
+      }
+      .channel-wrap {
+        padding: 12px;
+        overflow-y: auto;
+        min-height: 0;
+      }
+      .section-title {
+        margin: 8px 0;
+        font-size: 0.73rem;
+        letter-spacing: 0.08em;
+        color: #939aa4;
+        text-transform: uppercase;
+      }
+      .channel-list,
+      .mini-list,
+      .online-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 6px;
+      }
+      .channel-button {
+        width: 100%;
+        border: 0;
+        border-radius: 8px;
+        padding: 8px 10px;
+        text-align: left;
+        color: #c8ccd2;
+        background: transparent;
+        cursor: pointer;
+      }
+      .channel-button:hover { background: #3a3c43; color: #fff; }
+      .channel-button.active { background: #454852; color: #fff; font-weight: 700; }
+      .channel-list {
+        max-height: 36vh;
+        overflow-y: auto;
+      }
+      .tiny-input {
+        width: 100%;
+        min-height: 34px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #1b1d21;
+        color: var(--text);
+        padding: 0 10px;
+        font: inherit;
+        font-size: 0.8rem;
+      }
+      .tiny-btn {
+        width: 100%;
+        min-height: 34px;
+        border: 0;
+        border-radius: 8px;
+        background: #5056c7;
+        color: #fff;
+        font: inherit;
+        font-size: 0.78rem;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .tiny-btn.subtle { background: #3b3d44; }
+      .chat-col {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: 56px 1fr auto;
+        min-height: 0;
+      }
+      .chat-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+      .chat-head-title { margin: 0; font-size: 1rem; }
+      .chat-panel {
+        position: relative;
+        background: var(--panel);
+        min-height: 0;
+      }
+      .b-chat-col .chat-panel {
+        display: flex;
+        overflow: hidden;
+      }
+      .b-chat-col .chat {
+        flex: 1;
+        width: 100%;
+        min-height: 0;
+        height: auto;
+        padding: 12px;
+        gap: 8px;
+      }
+      .chat {
+        height: 100%;
+        overflow-y: auto;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .msg { display: flex; }
+      .msg.me { justify-content: flex-end; }
+      .msg.peer { justify-content: flex-start; }
+      .bubble {
+        max-width: min(82%, 760px);
+        border-radius: 12px;
+        padding: 10px 12px;
+        border: 1px solid #454852;
+        background: #3a3d45;
+      }
+      .msg.me .bubble { background: var(--mine); border-color: #4c70ba; }
+      .text { white-space: pre-wrap; line-height: 1.45; }
+      .meta { margin-top: 6px; font-size: 0.72rem; color: #b9bfca; }
+      .jump-latest {
+        position: absolute;
+        left: 50%;
+        bottom: 14px;
+        transform: translateX(-50%);
+        min-height: 34px;
+        border: 1px solid #6771ff;
+        border-radius: 999px;
+        background: #20254d;
+        color: #dfe3ff;
+        padding: 0 14px;
+        cursor: pointer;
+      }
+      .hidden { display: none; }
+      .composer {
+        border-top: 1px solid var(--line);
+        padding: 8px;
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 6px;
+        background: var(--panel);
+      }
+      .input {
+        min-height: 42px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #1b1d21;
+        color: var(--text);
+        padding: 0 12px;
+        font: inherit;
+      }
+      .send-btn {
+        min-height: 42px;
+        border: 0;
+        border-radius: 8px;
+        padding: 0 14px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .attach-btn {
+        min-height: 42px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        padding: 0 12px;
+        background: #272a31;
+        color: #d6daff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .file-chip {
+        margin: 6px 0 0;
+        font-size: 0.75rem;
+        color: #cfd3da;
+      }
+      .hidden-input {
+        display: none;
+      }
+      .file-link {
+        color: #b9c4ff;
+        text-decoration: underline;
+      }
+      .file-preview {
+        display: block;
+        max-width: min(280px, 50vw);
+        border-radius: 8px;
+        margin-top: 8px;
+        border: 1px solid #596079;
+      }
+      .member-col {
+        background: var(--panel-3);
+        border-left: 1px solid var(--line);
+        min-height: 0;
+        overflow-y: auto;
+        padding: 12px;
+      }
+      .card {
+        border: 1px solid #464951;
+        background: #2e3138;
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+      .card h3 { margin: 0 0 8px; font-size: 0.82rem; }
+      .online-item, .mini-list li {
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #2a2d33;
+        padding: 7px 8px;
+        font-size: 0.78rem;
+      }
+      .online-item.me { border-color: #6e79ff; }
+      .muted { margin: 6px 0 0; font-size: 0.75rem; color: var(--muted); }
+      .stack { display: grid; gap: 6px; }
+      .action-modal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.54);
+        z-index: 80;
+      }
+      .action-modal.open {
+        display: flex;
+      }
+      .action-modal-panel {
+        width: min(520px, 92vw);
+        border: 1px solid #4b4f58;
+        border-radius: 12px;
+        background: #202227;
+        overflow: hidden;
+      }
+      .action-modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px;
+        border-bottom: 1px solid #3a3d44;
+      }
+      .action-modal-head h3 {
+        margin: 0;
+        font-size: 0.95rem;
+      }
+      .action-close {
+        min-height: 30px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #2a2d33;
+        color: var(--text);
+        padding: 0 10px;
+        cursor: pointer;
+      }
+      .action-tabs {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        padding: 10px 12px 0;
+      }
+      .action-tab {
+        min-height: 34px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #25272c;
+        color: #cfd2d9;
+        font: inherit;
+        font-size: 0.76rem;
+        cursor: pointer;
+      }
+      .action-tab.active {
+        background: #323664;
+        border-color: #6771ff;
+        color: #fff;
+      }
+      .action-body {
+        padding: 12px;
+        display: grid;
+        gap: 8px;
+      }
+      .action-panel {
+        display: none;
+        gap: 8px;
+      }
+      .action-panel.active {
+        display: grid;
+      }
+      .action-error {
+        min-height: 18px;
+        color: #ff8b9f;
+        font-size: 0.75rem;
+      }
+      .action-foot {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 0 12px 12px;
+      }
+      @media (max-width: 1100px) {
+        .shell { grid-template-columns: 64px 230px 1fr; }
+        .member-col { display: none; }
+        .b-workspace { grid-template-columns: 240px 1fr; }
+      }
+      @media (max-width: 760px) {
+        .shell {
+          width: 100vw;
+          height: 100vh;
+          margin: 0;
+          border-radius: 0;
+          grid-template-columns: 1fr;
+        }
+        .rail, .channels { display: none; }
+        .shell.mode-b { grid-template-columns: 1fr; }
+        .b-workspace { grid-template-columns: 1fr; grid-column: 1 / -1; }
+        .b-left {
+          position: absolute;
+          left: 0;
+          top: 0;
+          bottom: 0;
+          width: min(82vw, 320px);
+          transform: translateX(-100%);
+          transition: transform 180ms ease;
+          z-index: 30;
+        }
+        .shell.b-drawer-open .b-left {
+          transform: translateX(0);
+        }
+        .b-drawer-backdrop {
+          position: absolute;
+          inset: 0;
+          background: rgba(0, 0, 0, 0.45);
+          z-index: 20;
+        }
+        .shell.b-drawer-open .b-drawer-backdrop {
+          display: block;
+        }
+        .b-drawer-toggle {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .action-modal {
+          align-items: flex-end;
+        }
+        .action-modal-panel {
+          width: 100%;
+          border-radius: 12px 12px 0 0;
+          max-height: 84vh;
+          overflow-y: auto;
+        }
+        .composer { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="shell" class="shell mode-rt">
+      <aside class="rail">
+        <button id="rtBtn" class="guild-dot active" type="button">
+          RT
+          <span id="rtBadge" class="badge hidden"></span>
+        </button>
+        <button id="aBtn" class="guild-dot" type="button">A</button>
+        <button id="bBtn" class="guild-dot" type="button">B</button>
+      </aside>
+      <section id="rtView" class="rt-view">
+        <div>RT</div>
+        <div id="authCard" class="auth-card">
+          <h3>Sign Up / Login</h3>
+          <input id="authUserIdInput" class="tiny-input" placeholder="user id" />
+          <div class="auth-actions">
+            <button id="signupBtn" class="tiny-btn" type="button">Sign Up</button>
+            <button id="loginBtn" class="tiny-btn subtle" type="button">Login</button>
+          </div>
+          <p id="authMessage" class="auth-message"></p>
+        </div>
+        <div class="rt-card">
+          <h3>Session</h3>
+          <p id="sessionUserLabel" class="muted">Not logged in</p>
+          <button id="logoutBtn" class="tiny-btn subtle" type="button">Logout</button>
+        </div>
+        <div class="rt-card">
+          <h3>Invite Alarms</h3>
+          <ul id="inviteAlarmList" class="alarm-list"></ul>
+          <p id="inviteAlarmEmpty" class="muted">No alarms yet</p>
+        </div>
+      </section>
+
+      <section id="bView" class="b-workspace">
+        <div id="bDrawerBackdrop" class="b-drawer-backdrop"></div>
+        <aside class="b-left">
+          <div class="b-search">
+            <input id="bDmSearchInput" class="tiny-input" placeholder="Search contact" />
+          </div>
+          <h2 class="section-title">Direct Messages</h2>
+          <ul id="bDmList" class="b-list"></ul>
+          <div id="bFriendsSection">
+            <h2 class="section-title">Friends</h2>
+            <ul id="bFriendList" class="mini-list"></ul>
+          </div>
+        </aside>
+
+        <section class="b-chat-col">
+          <header class="chat-head">
+            <div class="b-head-left">
+              <button id="bDrawerToggle" class="b-drawer-toggle" type="button">Menu</button>
+              <h2 id="bChatTitle" class="chat-head-title">@ select-friend</h2>
+            </div>
+            <div class="head-actions">
+              <span id="bStatus" class="muted"></span>
+              <button id="bActionBtn" class="head-action-btn" type="button">+</button>
+            </div>
+          </header>
+
+          <div class="chat-panel">
+            <section id="bMessages" class="chat"></section>
+            <button id="bJumpLatest" class="jump-latest hidden" type="button"></button>
+          </div>
+
+          <div class="composer">
+            <input id="bText" class="input" placeholder="Message @friend" />
+            <button id="bPickFileBtn" class="attach-btn" type="button">Attach</button>
+            <button id="bSend" class="send-btn" type="button">Send</button>
+          </div>
+          <p id="bSelectedFileLabel" class="file-chip"></p>
+          <input id="bFileInput" class="hidden-input" type="file" />
+        </section>
+      </section>
+
+      <aside class="channels">
+        <div class="server-head">
+          <h1>Realtime Hub</h1>
+          <div id="status" class="status">Connecting...</div>
+          <div class="name-editor">
+            <input id="userId" class="tiny-input" placeholder="Your name" />
+          </div>
+        </div>
+        <div class="channel-wrap">
+          <h2 class="section-title">Text Channels</h2>
+          <p id="currentRoom" class="muted">Current room: lobby</p>
+          <ul id="roomList" class="channel-list"></ul>
+          <button id="refreshRoomsBtn" class="tiny-btn subtle" type="button">Refresh Rooms</button>
+        </div>
+      </aside>
+
+      <section class="chat-col">
+        <header class="chat-head">
+          <h2 id="chatRoomTitle" class="chat-head-title"># lobby</h2>
+          <div class="head-actions">
+            <span id="socialStatus" class="muted"></span>
+            <button id="aActionBtn" class="head-action-btn" type="button">+</button>
+          </div>
+        </header>
+
+        <div class="chat-panel">
+          <section id="messages" class="chat"></section>
+          <button id="jumpLatest" class="jump-latest hidden" type="button"></button>
+        </div>
+
+        <div class="composer">
+          <input id="text" class="input" placeholder="Message #lobby" />
+          <button id="pickFileBtn" class="attach-btn" type="button">Attach</button>
+          <button id="send" class="send-btn">Send</button>
+        </div>
+        <p id="selectedFileLabel" class="file-chip"></p>
+        <input id="fileInput" class="hidden-input" type="file" />
+      </section>
+
+      <aside class="member-col">
+        <div class="card">
+          <h3>Online Users</h3>
+          <p id="onlineCount" class="muted">0 connected</p>
+          <ul id="onlineUsers" class="online-list"></ul>
+        </div>
+      </aside>
+      <section id="actionModal" class="action-modal">
+        <div class="action-modal-panel" role="dialog" aria-modal="true" aria-labelledby="actionModalTitle">
+          <div class="action-modal-head">
+            <h3 id="actionModalTitle">Action Center</h3>
+            <button id="actionCloseBtn" class="action-close" type="button">Close</button>
+          </div>
+          <div id="actionTabs" class="action-tabs">
+            <button class="action-tab active" type="button" data-tab="friend">친구 추가</button>
+            <button class="action-tab" type="button" data-tab="room">방 생성</button>
+            <button class="action-tab" type="button" data-tab="invite">방 초대</button>
+          </div>
+          <div class="action-body">
+            <div id="actionPanelFriend" class="action-panel active">
+              <input id="actionFriendIdInput" class="tiny-input" placeholder="friend userId" />
+            </div>
+            <div id="actionPanelRoom" class="action-panel">
+              <input id="actionRoomIdInput" class="tiny-input" placeholder="new roomId" />
+            </div>
+            <div id="actionPanelInvite" class="action-panel">
+              <input id="actionInviteRoomInput" class="tiny-input" placeholder="roomId (default current room)" />
+              <input id="actionInviteToInput" class="tiny-input" placeholder="to userId" />
+            </div>
+            <div id="actionError" class="action-error"></div>
+          </div>
+          <div class="action-foot">
+            <button id="actionCancelBtn" class="tiny-btn subtle" type="button">취소</button>
+            <button id="actionSubmitBtn" class="tiny-btn" type="button">실행</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script type="module" src="/js/main.js"></script>
+  </body>
+</html>
