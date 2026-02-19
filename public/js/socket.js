@@ -14,6 +14,14 @@ export function clearJoinedRooms() {
   state.joinedRooms.clear();
 }
 
+export function emitMessageSend(payload) {
+  socket.emit('message_send', payload);
+}
+
+export function emitMessageResync(payload) {
+  socket.emit('message_resync', payload);
+}
+
 export function bindSocketHandlers(handlers) {
   socket.on('connect', () => {
     handlers.onConnect();
@@ -24,7 +32,19 @@ export function bindSocketHandlers(handlers) {
   });
 
   socket.on('message', (payload) => {
-    handlers.onMessage(payload);
+    handlers.onLegacyMessage(payload);
+  });
+
+  socket.on('message_new', (payload) => {
+    handlers.onMessageNew(payload);
+  });
+
+  socket.on('message_ack', (payload) => {
+    handlers.onMessageAck(payload);
+  });
+
+  socket.on('message_resync_result', (payload) => {
+    handlers.onMessageResyncResult(payload);
   });
 
   socket.on('online_users', (users) => {

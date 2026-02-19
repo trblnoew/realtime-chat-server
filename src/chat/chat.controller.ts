@@ -132,8 +132,21 @@ export class ChatController {
     @Param('roomId') roomId: string,
     @Req() request: Request,
     @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('afterSeq') afterSeqRaw?: string,
   ) {
     const currentUserId = this.getCurrentUserIdOrThrow(request);
+    const afterSeq = Number(afterSeqRaw);
+    if (Number.isFinite(afterSeq) && afterSeq >= 0) {
+      return {
+        roomId,
+        messages: await this.chatStore.getRoomMessagesAfterSeq(
+          roomId,
+          currentUserId,
+          Math.floor(afterSeq),
+          limit ?? 50,
+        ),
+      };
+    }
     return {
       roomId,
       messages: await this.chatStore.getRoomMessages(

@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   room_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
+  client_msg_id TEXT NULL,
+  seq INTEGER NULL,
   text TEXT NOT NULL,
   file_name TEXT NULL,
   file_mime_type TEXT NULL,
@@ -56,6 +58,12 @@ CREATE INDEX IF NOT EXISTS idx_messages_room_sent_at
 
 CREATE INDEX IF NOT EXISTS idx_messages_user_id
   ON messages (user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_room_seq
+  ON messages (room_id, seq);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_room_user_client
+  ON messages (room_id, user_id, client_msg_id);
 
 CREATE INDEX IF NOT EXISTS idx_room_read_states_user_id
   ON room_read_states (user_id);

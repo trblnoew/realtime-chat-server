@@ -31,6 +31,8 @@ erDiagram
     text id PK
     text room_id FK
     text user_id FK
+    text client_msg_id nullable
+    integer seq nullable
     text text
     text file_name nullable
     text file_mime_type nullable
@@ -44,3 +46,6 @@ erDiagram
 - `room_memberships` uses a composite primary key: `(room_id, user_id)`.
 - `messages.file_*` columns are nullable for text-only messages.
 - `file_size` is persisted to align with file upload payload validation and replay.
+- `messages` has unique keys for reliability:
+  - `(room_id, seq)` for ordering
+  - `(room_id, user_id, client_msg_id)` for idempotency

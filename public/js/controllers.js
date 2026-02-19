@@ -9,6 +9,9 @@ import {
   removeInviteById,
   clearInvites,
   resetLoggedOutState,
+  getOutboxForRoom,
+  getRoomMessageStore,
+  getMessageKey,
 } from './state.js';
 import * as api from './api.js';
 import {
@@ -16,11 +19,12 @@ import {
   bindSocketHandlers,
   joinRoomIfNeeded,
   clearJoinedRooms,
+  emitMessageSend,
+  emitMessageResync,
 } from './socket.js';
 import {
   isNearBottom,
   scrollToLatest,
-  createMessageNode,
   renderSimpleList,
   renderRoomMessages,
   renderOnlineUsers,
@@ -55,6 +59,134 @@ function setSocialStatus(value) {
 
 function setBStatus(value) {
   elements.bStatus.textContent = value;
+}
+
+const ACK_TIMEOUT_MS = 3000;
+const MAX_RETRY = 3;
+
+function createClientMsgId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function buildPendingStatusLabel(pending) {
+  if (pending.status === 'failed') return 'failed';
+  if (pending.status === 'retrying') return `retrying(${pending.attempt}/${MAX_RETRY})`;
+  return 'sending';
+}
+
+function updateLastSeq(roomId, nextSeq) {
+  const seq = Number(nextSeq || 0);
+  if (!Number.isFinite(seq) || seq <= 0) return;
+  const current = Number(state.lastSeqByRoom.get(roomId) || 0);
+  if (seq > current) {
+    state.lastSeqByRoom.set(roomId, seq);
+  }
+}
+
+function getConfirmedMessages(roomId) {
+  const store = getRoomMessageStore(roomId);
+  if (!store) return [];
+  return Array.from(store.values());
+}
+
+function getPendingMessages(roomId) {
+  const outbox = getOutboxForRoom(roomId);
+  if (!outbox) return [];
+  const baseSeq = Number(state.lastSeqByRoom.get(roomId) || 0);
+  let offset = 1;
+  return Array.from(outbox.values()).map((pending) => {
+    const normalized = {
+      ...pending.payload,
+      userId: getViewerId(),
+      sentAt: pending.payload.sentAtClient,
+      pendingStatus: buildPendingStatusLabel(pending),
+      seq: baseSeq + offset,
+    };
+    offset += 1;
+    return normalized;
+  });
+}
+
+function buildRenderableMessages(roomId) {
+  const deduped = new Map();
+  getConfirmedMessages(roomId).forEach((message) => {
+    deduped.set(getMessageKey(message), message);
+  });
+  getPendingMessages(roomId).forEach((message) => {
+    const key = getMessageKey(message);
+    if (!deduped.has(key)) {
+      deduped.set(key, message);
+    }
+  });
+  return Array.from(deduped.values());
+}
+
+function renderActiveChannelMessages() {
+  if (!state.activeRoomId) {
+    elements.messages.innerHTML = '';
+    return;
+  }
+  renderRoomMessages(elements.messages, buildRenderableMessages(state.activeRoomId));
+}
+
+function renderActiveDmMessages() {
+  if (!state.activeDmRoomId) {
+    elements.bMessages.innerHTML = '';
+    return;
+  }
+  renderRoomMessages(elements.bMessages, buildRenderableMessages(state.activeDmRoomId));
+}
+
+function clearPendingTimer(pending) {
+  if (!pending?.timerId) return;
+  clearTimeout(pending.timerId);
+  pending.timerId = null;
+}
+
+function clearAllPendingTimers() {
+  for (const outbox of state.pendingOutboxByRoom.values()) {
+    outbox.forEach((pending) => clearPendingTimer(pending));
+  }
+}
+
+function removePendingByClientMsgId(roomId, clientMsgId) {
+  const outbox = getOutboxForRoom(roomId);
+  if (!outbox) return;
+  const pending = outbox.get(clientMsgId);
+  if (!pending) return;
+  clearPendingTimer(pending);
+  outbox.delete(clientMsgId);
+}
+
+function mergeConfirmedMessage(payload) {
+  if (!payload?.roomId) return;
+  const store = getRoomMessageStore(payload.roomId);
+  if (!store) return;
+  store.set(getMessageKey(payload), payload);
+  updateLastSeq(payload.roomId, payload.seq);
+  removePendingByClientMsgId(payload.roomId, payload.clientMsgId);
+}
+
+function replaceRoomMessages(roomId, messages) {
+  const store = getRoomMessageStore(roomId);
+  if (!store) return;
+  store.clear();
+  (messages || []).forEach((message) => {
+    store.set(getMessageKey(message), message);
+    updateLastSeq(roomId, message.seq);
+  });
+}
+
+function requestResync(roomId) {
+  const normalizedRoomId = String(roomId || '').trim();
+  if (!normalizedRoomId) return;
+  emitMessageResync({
+    roomId: normalizedRoomId,
+    afterSeq: Number(state.lastSeqByRoom.get(normalizedRoomId) || 0),
+  });
 }
 
 function scheduleMarkActiveDmRead() {
@@ -154,6 +286,7 @@ function applyLoggedInState(userIdValue) {
 }
 
 function applyLoggedOutState() {
+  clearAllPendingTimers();
   resetLoggedOutState();
   elements.userId.value = '';
   elements.userId.readOnly = true;
@@ -359,7 +492,9 @@ async function enterRoom(roomIdValue, options = {}) {
   joinRoomIfNeeded(roomId);
 
   const logs = await loadRoomLogs(roomId);
-  renderRoomMessages(elements.messages, logs);
+  replaceRoomMessages(roomId, logs);
+  renderActiveChannelMessages();
+  requestResync(roomId);
   state.unreadCount = 0;
   elements.jumpLatest.classList.add('hidden');
   await refreshRooms();
@@ -379,7 +514,9 @@ async function enterDmRoom(roomIdValue, peerUserId, options = {}) {
   joinRoomIfNeeded(roomId);
 
   const logs = await loadRoomLogs(roomId);
-  renderRoomMessages(elements.bMessages, logs);
+  replaceRoomMessages(roomId, logs);
+  renderActiveDmMessages();
+  requestResync(roomId);
   try {
     await api.markDirectRoomRead(roomId);
   } catch {
@@ -446,19 +583,17 @@ async function submitActionTab() {
 }
 
 function addChannelMessage(payload) {
+  mergeConfirmedMessage(payload);
   if (payload.roomId !== state.activeRoomId) return;
-
   const shouldStickToBottom = isNearBottom(elements.messages);
   const mine = payload.userId === getViewerId();
-  elements.messages.appendChild(createMessageNode(payload));
-
+  renderActiveChannelMessages();
   if (shouldStickToBottom) {
     scrollToLatest(elements.messages);
     state.unreadCount = 0;
     elements.jumpLatest.classList.add('hidden');
     return;
   }
-
   if (!mine) {
     state.unreadCount += 1;
     elements.jumpLatest.textContent = `${toShortPreview(payload.text)} (${state.unreadCount})`;
@@ -467,14 +602,13 @@ function addChannelMessage(payload) {
 }
 
 function addDmMessage(payload) {
+  mergeConfirmedMessage(payload);
   if (payload.roomId !== state.activeDmRoomId) return;
   const shouldStickToBottom = isNearBottom(elements.bMessages);
   const mine = payload.userId === getViewerId();
-  elements.bMessages.appendChild(createMessageNode(payload));
+  renderActiveDmMessages();
   if (shouldStickToBottom) {
     scheduleMarkActiveDmRead();
-  }
-  if (shouldStickToBottom) {
     scrollToLatest(elements.bMessages);
     state.bUnreadCount = 0;
     elements.bJumpLatest.classList.add('hidden');
@@ -635,6 +769,66 @@ function clearPendingFile(mode) {
   elements.bSelectedFileLabel.textContent = '';
 }
 
+function schedulePendingRetry(roomId, clientMsgId) {
+  const outbox = getOutboxForRoom(roomId);
+  if (!outbox) return;
+  const pending = outbox.get(clientMsgId);
+  if (!pending) return;
+  clearPendingTimer(pending);
+  pending.timerId = setTimeout(() => {
+    const currentOutbox = getOutboxForRoom(roomId);
+    const currentPending = currentOutbox?.get(clientMsgId);
+    if (!currentPending) return;
+    if (currentPending.attempt >= MAX_RETRY) {
+      currentPending.status = 'failed';
+      currentPending.timerId = null;
+      if (roomId === state.activeRoomId) renderActiveChannelMessages();
+      if (roomId === state.activeDmRoomId) renderActiveDmMessages();
+      return;
+    }
+    currentPending.attempt += 1;
+    currentPending.status = 'retrying';
+    emitMessageSend(currentPending.payload);
+    schedulePendingRetry(roomId, clientMsgId);
+    if (roomId === state.activeRoomId) renderActiveChannelMessages();
+    if (roomId === state.activeDmRoomId) renderActiveDmMessages();
+  }, ACK_TIMEOUT_MS);
+}
+
+function enqueueAndSendMessage(roomId, textValue, filePayload) {
+  const normalizedRoomId = String(roomId || '').trim();
+  if (!normalizedRoomId) return;
+  const payload = {
+    clientMsgId: createClientMsgId(),
+    roomId: normalizedRoomId,
+    text: String(textValue || '').trim(),
+    sentAtClient: new Date().toISOString(),
+    file: filePayload || undefined,
+  };
+  const outbox = getOutboxForRoom(normalizedRoomId);
+  if (!outbox) return;
+  outbox.set(payload.clientMsgId, {
+    payload,
+    status: 'sending',
+    attempt: 1,
+    createdAt: Date.now(),
+    timerId: null,
+  });
+  emitMessageSend(payload);
+  schedulePendingRetry(normalizedRoomId, payload.clientMsgId);
+}
+
+function resendAllPendingMessages() {
+  for (const [roomId, outbox] of state.pendingOutboxByRoom.entries()) {
+    outbox.forEach((pending, clientMsgId) => {
+      if (pending.status === 'failed') return;
+      pending.status = pending.attempt > 1 ? 'retrying' : 'sending';
+      emitMessageSend(pending.payload);
+      schedulePendingRetry(roomId, clientMsgId);
+    });
+  }
+}
+
 function bindEvents() {
   if (state.eventsBound) return;
   state.eventsBound = true;
@@ -644,14 +838,15 @@ function bindEvents() {
     const value = elements.text.value.trim();
     if (!value && !state.pendingChannelFile) return;
 
-    socket.emit('message', {
-      text: value,
-      roomId: state.activeRoomId,
-      file: state.pendingChannelFile || undefined,
-    });
+    enqueueAndSendMessage(
+      state.activeRoomId,
+      value,
+      state.pendingChannelFile || undefined,
+    );
 
     elements.text.value = '';
     clearPendingFile('A');
+    renderActiveChannelMessages();
     elements.text.focus();
   });
 
@@ -660,14 +855,15 @@ function bindEvents() {
     const value = elements.bText.value.trim();
     if (!value && !state.pendingDmFile) return;
 
-    socket.emit('message', {
-      text: value,
-      roomId: state.activeDmRoomId,
-      file: state.pendingDmFile || undefined,
-    });
+    enqueueAndSendMessage(
+      state.activeDmRoomId,
+      value,
+      state.pendingDmFile || undefined,
+    );
 
     elements.bText.value = '';
     clearPendingFile('B');
+    renderActiveDmMessages();
     elements.bText.focus();
   });
 
@@ -907,17 +1103,37 @@ function bindSocket() {
         syncUserName();
         if (state.activeRoomId) {
           joinRoomIfNeeded(state.activeRoomId);
+          requestResync(state.activeRoomId);
         }
         if (state.activeDmRoomId) {
           joinRoomIfNeeded(state.activeDmRoomId);
+          requestResync(state.activeDmRoomId);
         }
         joinAllDmRooms(state.cachedDmRooms);
+        state.cachedDmRooms.forEach((room) => {
+          if (room?.roomId) {
+            requestResync(room.roomId);
+          }
+        });
+        resendAllPendingMessages();
       }
     },
     onDisconnect: () => {
       elements.status.textContent = 'Disconnected';
     },
-    onMessage: (payload) => {
+    onLegacyMessage: (payload) => {
+      if (payload?.seq) {
+        if (isDmRoomId(payload.roomId)) {
+          addDmMessage(payload);
+          refreshDmRooms().catch(() => {
+            // noop
+          });
+          return;
+        }
+        addChannelMessage(payload);
+      }
+    },
+    onMessageNew: (payload) => {
       if (isDmRoomId(payload.roomId)) {
         addDmMessage(payload);
         refreshDmRooms().catch(() => {
@@ -926,6 +1142,31 @@ function bindSocket() {
         return;
       }
       addChannelMessage(payload);
+    },
+    onMessageAck: (payload) => {
+      const roomId = String(payload?.roomId || '').trim();
+      const clientMsgId = String(payload?.clientMsgId || '').trim();
+      if (!roomId || !clientMsgId) return;
+      const outbox = getOutboxForRoom(roomId);
+      const pending = outbox?.get(clientMsgId);
+      if (!pending) return;
+      if (payload.status === 'rejected') {
+        clearPendingTimer(pending);
+        pending.status = 'failed';
+      } else {
+        removePendingByClientMsgId(roomId, clientMsgId);
+      }
+      if (roomId === state.activeRoomId) renderActiveChannelMessages();
+      if (roomId === state.activeDmRoomId) renderActiveDmMessages();
+    },
+    onMessageResyncResult: (payload) => {
+      const roomId = String(payload?.roomId || '').trim();
+      if (!roomId) return;
+      (payload.messages || []).forEach((message) => {
+        mergeConfirmedMessage(message);
+      });
+      if (roomId === state.activeRoomId) renderActiveChannelMessages();
+      if (roomId === state.activeDmRoomId) renderActiveDmMessages();
     },
     onOnlineUsers: (users) => {
       renderOnlineUsers(users);

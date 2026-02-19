@@ -5,16 +5,30 @@ import { MessageDto } from './dto/message.dto';
 
 @Injectable()
 export class ChatService {
+  private readonly uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
   buildMessage(client: Socket, data: MessageDto) {
     const text = (data.text ?? '').trim();
     const file = data.file ? this.normalizeFile(data.file) : undefined;
+    const roomId = (data.roomId ?? 'lobby').trim() || 'lobby';
+    const clientMsgId = (data.clientMsgId ?? '').trim();
+    const sentAtClient = (data.sentAtClient ?? '').trim();
+
     if (!text && !file) {
       throw new BadRequestException('Message text or file is required');
+    }
+    if (!clientMsgId || !this.uuidPattern.test(clientMsgId)) {
+      throw new BadRequestException('Invalid clientMsgId');
+    }
+    if (!sentAtClient || Number.isNaN(Date.parse(sentAtClient))) {
+      throw new BadRequestException('Invalid sentAtClient');
     }
 
     return {
       id: randomUUID(),
-      roomId: data.roomId ?? 'lobby',
+      clientMsgId,
+      roomId,
       text: text || (file ? '[file]' : ''),
       userId: data.userId ?? client.id,
       sentAt: new Date().toISOString(),

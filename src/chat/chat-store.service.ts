@@ -18,9 +18,12 @@ import { RoomReadStateEntity } from './entities/room-read-state.entity';
 import { UserEntity } from './entities/user.entity';
 
 type InviteStatus = 'pending' | 'accepted' | 'rejected';
+type SaveStatus = 'accepted' | 'duplicate';
 
 export type ChatMessage = {
   id: string;
+  clientMsgId: string;
+  seq: number;
   roomId: string;
   text: string;
   userId: string;
@@ -31,6 +34,11 @@ export type ChatMessage = {
     size: number;
     dataUrl: string;
   };
+};
+
+export type SaveMessageResult = {
+  status: SaveStatus;
+  message: ChatMessage;
 };
 
 export type RoomInvite = {
@@ -228,7 +236,7 @@ export class ChatStoreService implements OnModuleInit {
 
     return {
       roomId,
-      peerUserId: userA === userB ? userA : userB,
+      peerUserId: userB,
     };
   }
 
@@ -265,7 +273,7 @@ export class ChatStoreService implements OnModuleInit {
         const peerUserId = await this.getRoomPeerUserId(membership.roomId, userId);
         const lastMessage = await this.messageRepo.findOne({
           where: { roomId: membership.roomId },
-          order: { sentAt: 'DESC' },
+          order: { seq: 'DESC', sentAt: 'DESC' },
         });
         return {
           roomId: membership.roomId,
@@ -338,33 +346,84 @@ export class ChatStoreService implements OnModuleInit {
     return members.map((member) => member.userId);
   }
 
-  async saveMessage(message: ChatMessage) {
+  async saveMessageIdempotent(message: Omit<ChatMessage, 'seq'>) {
     await this.ensureMembership(message.roomId, message.userId);
-    await this.messageRepo.save(
-      this.messageRepo.create({
-        id: message.id,
+    const normalizedClientMsgId = String(message.clientMsgId || '').trim();
+    if (!normalizedClientMsgId) {
+      throw new BadRequestException('clientMsgId is required');
+    }
+
+    return this.messageRepo.manager.transaction(async (manager) => {
+      const repo = manager.getRepository(MessageEntity);
+      const existing = await repo.findOneBy({
         roomId: message.roomId,
         userId: message.userId,
-        text: message.text,
-        fileName: message.file?.name ?? null,
-        fileMimeType: message.file?.mimeType ?? null,
-        fileSize: message.file?.size ?? null,
-        fileDataUrl: message.file?.dataUrl ?? null,
-        sentAt: new Date(message.sentAt),
-      }),
-    );
+        clientMsgId: normalizedClientMsgId,
+      });
+      if (existing) {
+        return {
+          status: 'duplicate' as const,
+          message: this.toChatMessage(existing),
+        };
+      }
+
+      const maxSeqRow = await repo
+        .createQueryBuilder('m')
+        .select('MAX(m.seq)', 'maxSeq')
+        .where('m.room_id = :roomId', { roomId: message.roomId })
+        .getRawOne<{ maxSeq: string | number | null }>();
+      const nextSeq = this.parseSeq(maxSeqRow?.maxSeq) + 1;
+
+      const saved = await repo.save(
+        repo.create({
+          id: message.id,
+          roomId: message.roomId,
+          userId: message.userId,
+          clientMsgId: normalizedClientMsgId,
+          seq: nextSeq,
+          text: message.text,
+          fileName: message.file?.name ?? null,
+          fileMimeType: message.file?.mimeType ?? null,
+          fileSize: message.file?.size ?? null,
+          fileDataUrl: message.file?.dataUrl ?? null,
+          sentAt: new Date(message.sentAt),
+        }),
+      );
+
+      return {
+        status: 'accepted' as const,
+        message: this.toChatMessage(saved),
+      };
+    });
   }
 
   async getRoomMessages(roomId: string, userId: string, limit = 50) {
     await this.ensureMembership(roomId, userId);
     const rows = await this.messageRepo.find({
       where: { roomId },
-      order: { sentAt: 'DESC' },
+      order: { seq: 'DESC', sentAt: 'DESC' },
       take: limit,
     });
-    return rows
-      .reverse()
-      .map((row) => this.toChatMessage(row));
+    return rows.reverse().map((row) => this.toChatMessage(row));
+  }
+
+  async getRoomMessagesAfterSeq(
+    roomId: string,
+    userId: string,
+    afterSeq: number,
+    limit = 50,
+  ) {
+    await this.ensureMembership(roomId, userId);
+    const rows = await this.messageRepo
+      .createQueryBuilder('m')
+      .where('m.room_id = :roomId', { roomId })
+      .andWhere('m.seq IS NOT NULL')
+      .andWhere('m.seq > :afterSeq', { afterSeq })
+      .orderBy('m.seq', 'ASC')
+      .addOrderBy('m.sent_at', 'ASC')
+      .limit(limit)
+      .getMany();
+    return rows.map((row) => this.toChatMessage(row));
   }
 
   async ensureMembership(roomId: string, userId: string) {
@@ -382,7 +441,7 @@ export class ChatStoreService implements OnModuleInit {
 
     const lastMessage = await this.messageRepo.findOne({
       where: { roomId },
-      order: { sentAt: 'DESC' },
+      order: { seq: 'DESC', sentAt: 'DESC' },
     });
 
     const existing = await this.roomReadStateRepo.findOneBy({ roomId, userId });
@@ -449,6 +508,8 @@ export class ChatStoreService implements OnModuleInit {
   private toChatMessage(row: MessageEntity): ChatMessage {
     return {
       id: row.id,
+      clientMsgId: row.clientMsgId ?? row.id,
+      seq: this.parseSeq(row.seq),
       roomId: row.roomId,
       text: row.text,
       userId: row.userId,
@@ -479,6 +540,14 @@ export class ChatStoreService implements OnModuleInit {
     return clean.length > 10 ? `${clean.slice(0, 10)}...` : clean;
   }
 
+  private parseSeq(value: string | number | null | undefined) {
+    const parsed = Number(value ?? 0);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return 0;
+    }
+    return Math.floor(parsed);
+  }
+
   private async seedDummyData() {
     const hasUsers = (await this.userRepo.count()) > 0;
     if (hasUsers) {
@@ -500,22 +569,25 @@ export class ChatStoreService implements OnModuleInit {
     await this.createRoom('project-alpha', 'alice');
     await this.addRoomMember('project-alpha', 'bob');
 
-    await this.saveMessage({
+    await this.saveMessageIdempotent({
       id: randomUUID(),
+      clientMsgId: randomUUID(),
       roomId: 'lobby',
       userId: 'alice',
       text: 'Welcome to lobby',
       sentAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
     });
-    await this.saveMessage({
+    await this.saveMessageIdempotent({
       id: randomUUID(),
+      clientMsgId: randomUUID(),
       roomId: 'lobby',
       userId: 'bob',
       text: 'Hi all',
       sentAt: new Date(Date.now() - 1000 * 60 * 4).toISOString(),
     });
-    await this.saveMessage({
+    await this.saveMessageIdempotent({
       id: randomUUID(),
+      clientMsgId: randomUUID(),
       roomId: 'project-alpha',
       userId: 'alice',
       text: 'Kickoff at 2pm',

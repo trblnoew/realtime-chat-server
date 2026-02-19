@@ -10,4 +10,6 @@ export class MessageDto {
   userId?: string;
   roomId?: string;
   file?: MessageFileDto;
+  clientMsgId?: string;
+  sentAtClient?: string;
 }

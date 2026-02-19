@@ -19,6 +19,9 @@ export const state = {
   joinedRooms: new Set(),
   eventsBound: false,
   dmReadDebounceTimer: null,
+  pendingOutboxByRoom: new Map(),
+  lastSeqByRoom: new Map(),
+  roomMessagesByRoom: new Map(),
 };
 
 export function isDmRoomId(roomId) {
@@ -94,6 +97,36 @@ export function resetLoggedOutState() {
   state.unreadCount = 0;
   state.bUnreadCount = 0;
   state.dmReadDebounceTimer = null;
+  state.pendingOutboxByRoom.clear();
+  state.lastSeqByRoom.clear();
+  state.roomMessagesByRoom.clear();
   resetJoinedRooms();
   clearInvites();
+}
+
+export function getOutboxForRoom(roomId) {
+  const key = String(roomId || '').trim();
+  if (!key) return null;
+  const existing = state.pendingOutboxByRoom.get(key);
+  if (existing) return existing;
+  const created = new Map();
+  state.pendingOutboxByRoom.set(key, created);
+  return created;
+}
+
+export function getRoomMessageStore(roomId) {
+  const key = String(roomId || '').trim();
+  if (!key) return null;
+  const existing = state.roomMessagesByRoom.get(key);
+  if (existing) return existing;
+  const created = new Map();
+  state.roomMessagesByRoom.set(key, created);
+  return created;
+}
+
+export function getMessageKey(payload) {
+  const stableId = String(payload?.id || '').trim();
+  if (stableId) return `id:${stableId}`;
+  const fallback = `${payload?.roomId || ''}:${payload?.userId || ''}:${payload?.clientMsgId || ''}`;
+  return `client:${fallback}`;
 }

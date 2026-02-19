@@ -34,9 +34,14 @@ export async function getRooms() {
   return apiRequest('/social/rooms', 'GET');
 }
 
-export async function getRoomMessages(roomId, limit = 100) {
+export async function getRoomMessages(roomId, limit = 100, afterSeq) {
+  const query = new URLSearchParams();
+  query.set('limit', String(limit));
+  if (Number.isFinite(afterSeq) && afterSeq >= 0) {
+    query.set('afterSeq', String(Math.floor(afterSeq)));
+  }
   return apiRequest(
-    `/social/rooms/${encodeURIComponent(roomId)}/messages?limit=${limit}`,
+    `/social/rooms/${encodeURIComponent(roomId)}/messages?${query.toString()}`,
     'GET',
   );
 }

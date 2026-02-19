@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -9,6 +10,7 @@ import {
   WebSocketServer,
   WsException,
 } from '@nestjs/websockets';
+import { randomUUID } from 'crypto';
 import { Server, Socket } from 'socket.io';
 import { ChatService } from './chat.service';
 import { MessageDto } from './dto/message.dto';
@@ -22,6 +24,7 @@ export class ChatGateway
   @WebSocketServer()
   server!: Server;
 
+  private readonly logger = new Logger(ChatGateway.name);
   private readonly onlineUsers = new Map<string, string>();
 
   constructor(
@@ -34,7 +37,7 @@ export class ChatGateway
     this.realtimeNotify.attachServer(this.server);
   }
 
-  handleConnection(client: Socket) {
+  handleConnection(_client: Socket) {
     this.emitOnlineUsers();
   }
 
@@ -48,8 +51,29 @@ export class ChatGateway
   }
 
   @SubscribeMessage('message')
-  async handleMessage(
+  async handleLegacyMessage(
     @MessageBody() data: MessageDto,
+    @ConnectedSocket() client: Socket,
+  ) {
+    const normalized: MessageDto = {
+      ...data,
+      clientMsgId: randomUUID(),
+      sentAtClient: new Date().toISOString(),
+    };
+    return this.processMessageSend(normalized, client);
+  }
+
+  @SubscribeMessage('message_send')
+  async handleMessageSend(
+    @MessageBody() data: MessageDto,
+    @ConnectedSocket() client: Socket,
+  ) {
+    return this.processMessageSend(data, client);
+  }
+
+  @SubscribeMessage('message_resync')
+  async handleMessageResync(
+    @MessageBody() data: { roomId?: string; afterSeq?: number },
     @ConnectedSocket() client: Socket,
   ) {
     try {
@@ -58,17 +82,18 @@ export class ChatGateway
         throw new WsException('Login required');
       }
       const roomId = (data.roomId ?? 'lobby').trim() || 'lobby';
+      const afterSeq = Number(data.afterSeq ?? 0);
       await this.chatStore.ensureMembership(roomId, effectiveUserId);
-
-      const payload = this.chatService.buildMessage(client, {
-        ...data,
-        userId: effectiveUserId,
+      client.join(roomId);
+      const messages = await this.chatStore.getRoomMessagesAfterSeq(
         roomId,
-      });
-      client.join(payload.roomId);
-      await this.chatStore.saveMessage(payload);
-      this.server.to(payload.roomId).emit('message', payload);
-      return { event: 'sent' };
+        effectiveUserId,
+        Number.isFinite(afterSeq) && afterSeq > 0 ? Math.floor(afterSeq) : 0,
+        100,
+      );
+      this.logCounter('message.resend.request.count', roomId);
+      client.emit('message_resync_result', { roomId, messages });
+      return { event: 'resync_ok', roomId, count: messages.length };
     } catch (error) {
       throw new WsException((error as Error).message);
     }
@@ -126,10 +151,59 @@ export class ChatGateway
     return { event: 'user_updated' };
   }
 
+  private async processMessageSend(
+    data: MessageDto,
+    client: Socket,
+  ) {
+    try {
+      const effectiveUserId = this.onlineUsers.get(client.id);
+      if (!effectiveUserId) {
+        throw new WsException('Login required');
+      }
+      const roomId = (data.roomId ?? 'lobby').trim() || 'lobby';
+      await this.chatStore.ensureMembership(roomId, effectiveUserId);
+
+      const payload = this.chatService.buildMessage(client, {
+        ...data,
+        userId: effectiveUserId,
+        roomId,
+      });
+
+      client.join(payload.roomId);
+      const saved = await this.chatStore.saveMessageIdempotent(payload);
+
+      const ack = {
+        clientMsgId: payload.clientMsgId,
+        serverMsgId: saved.message.id,
+        roomId: payload.roomId,
+        seq: saved.message.seq,
+        status: saved.status,
+      };
+      client.emit('message_ack', ack);
+
+      if (saved.status === 'accepted') {
+        this.server.to(payload.roomId).emit('message_new', saved.message);
+        this.server.to(payload.roomId).emit('message', saved.message);
+        this.logCounter('message.accepted.count', payload.roomId);
+      } else {
+        this.logCounter('message.duplicate.count', payload.roomId);
+      }
+
+      return { event: 'sent', status: saved.status };
+    } catch (error) {
+      this.logCounter('message.rejected.count', data.roomId ?? 'lobby');
+      throw new WsException((error as Error).message);
+    }
+  }
+
   private emitOnlineUsers() {
     const users = Array.from(new Set(this.onlineUsers.values())).map((userId) => ({
       userId,
     }));
     this.server.emit('online_users', users);
+  }
+
+  private logCounter(metric: string, roomId: string) {
+    this.logger.log(JSON.stringify({ metric, roomId, at: new Date().toISOString() }));
   }
 }

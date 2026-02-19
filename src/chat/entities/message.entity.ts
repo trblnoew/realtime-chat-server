@@ -3,6 +3,10 @@ import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
 @Entity('messages')
 @Index('idx_messages_user_id', ['userId'])
 @Index('idx_messages_room_sent_at', ['roomId', 'sentAt'])
+@Index('uq_messages_room_seq', ['roomId', 'seq'], { unique: true })
+@Index('uq_messages_room_user_client', ['roomId', 'userId', 'clientMsgId'], {
+  unique: true,
+})
 export class MessageEntity {
   @PrimaryColumn({ type: 'text' })
   id!: string;
@@ -12,6 +16,12 @@ export class MessageEntity {
 
   @Column({ name: 'user_id', type: 'text' })
   userId!: string;
+
+  @Column({ name: 'client_msg_id', type: 'text', nullable: true })
+  clientMsgId!: string | null;
+
+  @Column({ type: 'integer', nullable: true })
+  seq!: number | null;
 
   @Column({ type: 'text' })
   text!: string;

@@ -51,7 +51,12 @@ export function createMessageNode(payload) {
 
   const meta = document.createElement('div');
   meta.className = 'meta';
-  meta.textContent = `${payload.userId} - ${new Date(payload.sentAt).toLocaleTimeString()}`;
+  if (payload.pendingStatus) {
+    meta.textContent = `${payload.userId} - ${payload.pendingStatus}`;
+    wrapper.classList.add('pending');
+  } else {
+    meta.textContent = `${payload.userId} - ${new Date(payload.sentAt).toLocaleTimeString()}`;
+  }
   bubble.appendChild(meta);
   wrapper.appendChild(bubble);
   return wrapper;
@@ -74,7 +79,15 @@ export function renderSimpleList(target, items, emptyText) {
 
 export function renderRoomMessages(target, list) {
   target.innerHTML = '';
-  list.forEach((message) => {
+  const normalized = [...list].sort((a, b) => {
+    const leftSeq = Number(a?.seq ?? 0);
+    const rightSeq = Number(b?.seq ?? 0);
+    if (leftSeq !== rightSeq) {
+      return leftSeq - rightSeq;
+    }
+    return String(a?.sentAt || '').localeCompare(String(b?.sentAt || ''));
+  });
+  normalized.forEach((message) => {
     target.appendChild(createMessageNode(message));
   });
   scrollToLatest(target);
