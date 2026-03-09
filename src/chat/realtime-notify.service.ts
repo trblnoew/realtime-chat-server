@@ -31,11 +31,64 @@ export class RealtimeNotifyService {
   }
 
   notifyInvite(toUserId: string, payload: unknown) {
+    this.notifyUser(toUserId, 'invite_alarm', payload);
+  }
+
+  notifyUser(userId: string, event: string, payload: unknown) {
     if (!this.server) return;
-    const sockets = this.socketsByUser.get(toUserId);
+    const sockets = this.socketsByUser.get(userId);
     if (!sockets || sockets.size === 0) return;
     for (const socketId of sockets) {
-      this.server.to(socketId).emit('invite_alarm', payload);
+      this.server.to(socketId).emit(event, payload);
     }
+  }
+
+  notifyUsers(userIds: string[], event: string, payload: unknown) {
+    const deduped = Array.from(new Set((userIds || []).map((id) => String(id || '').trim())));
+    deduped.forEach((userId) => {
+      if (!userId) return;
+      this.notifyUser(userId, event, payload);
+    });
+  }
+
+  getSocketCount(userId: string) {
+    const sockets = this.socketsByUser.get(String(userId || '').trim());
+    if (!sockets) return 0;
+    return sockets.size;
+  }
+
+  getOnlineUserIds() {
+    return Array.from(this.socketsByUser.keys());
+  }
+
+  reset() {
+    this.socketsByUser.clear();
+    this.server = undefined;
+  }
+
+  hasAttachedServer() {
+    return Boolean(this.server);
+  }
+
+  hasUser(userId: string) {
+    return this.socketsByUser.has(String(userId || '').trim());
+  }
+
+  hasSocket(userId: string, socketId: string) {
+    const sockets = this.socketsByUser.get(String(userId || '').trim());
+    if (!sockets) return false;
+    return sockets.has(String(socketId || '').trim());
+  }
+
+  getSockets(userId: string) {
+    return Array.from(this.socketsByUser.get(String(userId || '').trim()) ?? []);
+  }
+
+  totalSocketCount() {
+    let total = 0;
+    for (const sockets of this.socketsByUser.values()) {
+      total += sockets.size;
+    }
+    return total;
   }
 }

@@ -7,6 +7,10 @@ async function bootstrap() {
   app.enableCors();
   const expressApp = app.getHttpAdapter().getInstance();
   const indexPath = join(process.cwd(), 'public', 'index.html');
+  const loginPath = join(process.cwd(), 'public', 'login.html');
+  expressApp.get('/login', (_req, res) => {
+    res.sendFile(loginPath);
+  });
   expressApp.get(['/rt', '/a/:roomId', '/b/:peerUserId'], (_req, res) => {
     res.sendFile(indexPath);
   });

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Realtime Chat Login</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg-0: #030c2c;
+        --bg-1: #010624;
+        --card: #09183e;
+        --card-line: #20315f;
+        --text: #f3f6ff;
+        --muted: #9cb0df;
+        --input-bg: #030b27;
+        --input-line: #1f3060;
+        --accent: #4f67ff;
+        --accent-hover: #4258e8;
+        --danger: #ff7d98;
+        --ok: #7ee8b5;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        font-family: 'Space Grotesk', sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(1100px 560px at 50% -180px, #143e8f 0%, transparent 75%),
+          linear-gradient(180deg, var(--bg-0), var(--bg-1));
+      }
+      .card {
+        width: min(420px, 100%);
+        border-radius: 18px;
+        border: 1px solid var(--card-line);
+        background: linear-gradient(180deg, #0b1d48, var(--card));
+        padding: 30px 24px 20px;
+        box-shadow: 0 26px 48px rgba(0, 3, 14, 0.46);
+      }
+      .brand {
+        margin: 0 0 20px;
+        text-align: center;
+        font-size: 2rem;
+        letter-spacing: 0.04em;
+        font-weight: 700;
+      }
+      .tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      .tab {
+        min-height: 38px;
+        border-radius: 10px;
+        border: 1px solid var(--input-line);
+        background: #07153a;
+        color: var(--muted);
+        font: inherit;
+        font-size: 0.88rem;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .tab.active {
+        color: #fff;
+        border-color: #5f7cff;
+        background: #102967;
+      }
+      .panel {
+        display: none;
+      }
+      .panel.active {
+        display: block;
+      }
+      .field {
+        margin-bottom: 12px;
+      }
+      .field label {
+        display: block;
+        margin: 0 0 6px;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+      .field input {
+        width: 100%;
+        min-height: 42px;
+        border: 1px solid var(--input-line);
+        border-radius: 10px;
+        background: var(--input-bg);
+        color: var(--text);
+        font: inherit;
+        padding: 0 12px;
+      }
+      .submit {
+        width: 100%;
+        min-height: 42px;
+        border: 0;
+        border-radius: 10px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        font-size: 0.92rem;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .submit:hover {
+        background: var(--accent-hover);
+      }
+      .submit[disabled] {
+        opacity: 0.72;
+        cursor: wait;
+      }
+      .divider {
+        height: 1px;
+        border: 0;
+        background: #21366d;
+        margin: 16px 0 12px;
+      }
+      .message {
+        min-height: 20px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      .message.error {
+        color: var(--danger);
+      }
+      .message.success {
+        color: var(--ok);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card" aria-live="polite">
+      <h1 class="brand">RTS</h1>
+
+      <div class="tabs">
+        <button id="tabLogin" class="tab active" type="button">Login</button>
+        <button id="tabSignup" class="tab" type="button">Sign Up</button>
+      </div>
+
+      <section id="loginPanel" class="panel active">
+        <form id="loginForm">
+          <div class="field">
+            <label for="loginEmail">Email</label>
+            <input id="loginEmail" type="email" autocomplete="email" required />
+          </div>
+          <div class="field">
+            <label for="loginPassword">Password</label>
+            <input
+              id="loginPassword"
+              type="password"
+              autocomplete="current-password"
+              required
+            />
+          </div>
+          <button id="loginSubmitBtn" class="submit" type="submit">Login</button>
+        </form>
+      </section>
+
+      <section id="signupPanel" class="panel">
+        <form id="signupForm">
+          <div class="field">
+            <label for="signupEmail">Email</label>
+            <input id="signupEmail" type="email" autocomplete="email" required />
+          </div>
+          <div class="field">
+            <label for="signupPassword">Password</label>
+            <input
+              id="signupPassword"
+              type="password"
+              autocomplete="new-password"
+              required
+            />
+          </div>
+          <div class="field">
+            <label for="signupNickname">Nickname</label>
+            <input id="signupNickname" type="text" autocomplete="nickname" required />
+          </div>
+          <button id="signupSubmitBtn" class="submit" type="submit">Create Account</button>
+        </form>
+      </section>
+
+      <hr class="divider" />
+      <p id="loginMessage" class="message"></p>
+    </main>
+
+    <script type="module" src="/js/login.js"></script>
+  </body>
+</html>

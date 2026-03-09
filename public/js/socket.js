@@ -1,6 +1,32 @@
 import { state } from './state.js';
 
-export const socket = io();
+export const socket = io({
+  autoConnect: false,
+});
+
+export function setSocketAuthToken(token) {
+  const normalized = String(token || '').trim();
+  socket.auth = normalized ? { token: normalized } : {};
+}
+
+export function connectSocket() {
+  if (!socket.connected) {
+    socket.connect();
+  }
+}
+
+export function disconnectSocket() {
+  if (socket.connected) {
+    socket.disconnect();
+  }
+}
+
+export function reconnectSocket() {
+  if (socket.connected) {
+    socket.disconnect();
+  }
+  socket.connect();
+}
 
 export function joinRoomIfNeeded(roomId) {
   const normalizedRoomId = String(roomId || '').trim();
@@ -53,5 +79,13 @@ export function bindSocketHandlers(handlers) {
 
   socket.on('invite_alarm', (alarm) => {
     handlers.onInviteAlarm(alarm);
+  });
+
+  socket.on('friend_request_new', (payload) => {
+    handlers.onFriendRequestNew(payload);
+  });
+
+  socket.on('friend_request_updated', (payload) => {
+    handlers.onFriendRequestUpdated(payload);
   });
 }

@@ -157,19 +157,6 @@
         color: var(--muted);
         font-size: 0.72rem;
       }
-      .auth-card {
-        width: min(420px, 90%);
-        border: 1px solid #4b4f58;
-        border-radius: 12px;
-        background: #202227;
-        padding: 12px;
-      }
-      .auth-actions {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
-        margin-top: 8px;
-      }
       .auth-message {
         margin-top: 8px;
         font-size: 0.78rem;
@@ -219,9 +206,6 @@
       }
       .b-search {
         margin: 8px 0;
-      }
-      #bFriendsSection {
-        display: none;
       }
       .b-list {
         list-style: none;
@@ -289,6 +273,105 @@
         font-size: 0.75rem;
         cursor: pointer;
       }
+      #bStatus {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 0 10px;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        background: transparent;
+        transition: all 140ms ease;
+      }
+      #bStatus.warn {
+        color: #ffd5de;
+        border-color: #7b2e40;
+        background: #3e1f29;
+        font-weight: 600;
+      }
+      .friend-row {
+        list-style: none;
+      }
+      .friend-item-btn {
+        width: 100%;
+        min-height: 38px;
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #2a2d33;
+        color: var(--text);
+        padding: 0 10px;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+        transition: border-color 120ms ease, background-color 120ms ease,
+          transform 120ms ease;
+      }
+      .friend-item-btn:hover {
+        border-color: #6e79ff;
+        background: #34394a;
+        transform: translateY(-1px);
+      }
+      .friend-item-btn:focus-visible {
+        outline: 2px solid #7f8aff;
+        outline-offset: 2px;
+      }
+      .request-section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .request-badge {
+        min-width: 18px;
+        height: 18px;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: #5865f2;
+        color: #fff;
+        font-size: 0.68rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .request-row {
+        border: 1px solid #4a4d55;
+        border-radius: 8px;
+        background: #2a2d33;
+        padding: 8px;
+        display: grid;
+        gap: 6px;
+      }
+      .request-row-head {
+        font-size: 0.78rem;
+        color: #d7dce6;
+      }
+      .request-row-meta {
+        color: var(--muted);
+        font-size: 0.7rem;
+      }
+      .request-row-actions {
+        display: inline-flex;
+        gap: 6px;
+      }
+      .request-action-btn {
+        min-height: 28px;
+        border: 1px solid #4a4d55;
+        border-radius: 6px;
+        background: #23252b;
+        color: var(--text);
+        padding: 0 9px;
+        font-size: 0.72rem;
+        cursor: pointer;
+      }
+      .request-action-btn.accept {
+        border-color: #4c70ba;
+        background: #27457e;
+      }
+      .request-action-btn.reject {
+        border-color: #7a3d4f;
+        background: #4a2732;
+      }
       .b-chat-col {
         min-width: 0;
         min-height: 0;
@@ -329,9 +412,6 @@
       }
       .server-head h1 { margin: 0; font-size: 0.95rem; }
       .status { margin-top: 6px; font-size: 0.75rem; color: var(--muted); }
-      .name-editor {
-        margin-top: 10px;
-      }
       .channel-wrap {
         padding: 12px;
         overflow-y: auto;
@@ -698,19 +778,11 @@
       </aside>
       <section id="rtView" class="rt-view">
         <div>RT</div>
-        <div id="authCard" class="auth-card">
-          <h3>Sign Up / Login</h3>
-          <input id="authUserIdInput" class="tiny-input" placeholder="user id" />
-          <div class="auth-actions">
-            <button id="signupBtn" class="tiny-btn" type="button">Sign Up</button>
-            <button id="loginBtn" class="tiny-btn subtle" type="button">Login</button>
-          </div>
-          <p id="authMessage" class="auth-message"></p>
-        </div>
         <div class="rt-card">
           <h3>Session</h3>
           <p id="sessionUserLabel" class="muted">Not logged in</p>
           <button id="logoutBtn" class="tiny-btn subtle" type="button">Logout</button>
+          <p id="authMessage" class="auth-message"></p>
         </div>
         <div class="rt-card">
           <h3>Invite Alarms</h3>
@@ -727,6 +799,16 @@
           </div>
           <h2 class="section-title">Direct Messages</h2>
           <ul id="bDmList" class="b-list"></ul>
+          <div id="bFriendRequestsSection">
+            <div class="request-section-head">
+              <h2 class="section-title">Friend Requests</h2>
+              <span id="bRequestBadge" class="request-badge hidden">0</span>
+            </div>
+            <h2 class="section-title">Incoming</h2>
+            <ul id="bIncomingFriendRequestList" class="mini-list"></ul>
+            <h2 class="section-title">Outgoing</h2>
+            <ul id="bOutgoingFriendRequestList" class="mini-list"></ul>
+          </div>
           <div id="bFriendsSection">
             <h2 class="section-title">Friends</h2>
             <ul id="bFriendList" class="mini-list"></ul>
@@ -764,9 +846,6 @@
         <div class="server-head">
           <h1>Realtime Hub</h1>
           <div id="status" class="status">Connecting...</div>
-          <div class="name-editor">
-            <input id="userId" class="tiny-input" placeholder="Your name" />
-          </div>
         </div>
         <div class="channel-wrap">
           <h2 class="section-title">Text Channels</h2>
@@ -819,14 +898,14 @@
           </div>
           <div class="action-body">
             <div id="actionPanelFriend" class="action-panel active">
-              <input id="actionFriendIdInput" class="tiny-input" placeholder="friend userId" />
+              <input id="actionFriendNicknameInput" class="tiny-input" placeholder="friend nickname" />
             </div>
             <div id="actionPanelRoom" class="action-panel">
               <input id="actionRoomIdInput" class="tiny-input" placeholder="new roomId" />
             </div>
             <div id="actionPanelInvite" class="action-panel">
               <input id="actionInviteRoomInput" class="tiny-input" placeholder="roomId (default current room)" />
-              <input id="actionInviteToInput" class="tiny-input" placeholder="to userId" />
+              <input id="actionInviteToNicknameInput" class="tiny-input" placeholder="to nickname" />
             </div>
             <div id="actionError" class="action-error"></div>
           </div>

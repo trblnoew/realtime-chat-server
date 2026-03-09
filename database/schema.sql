@@ -2,6 +2,8 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  nickname TEXT NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -50,8 +52,34 @@ CREATE TABLE IF NOT EXISTS room_read_states (
   FOREIGN KEY (last_read_message_id) REFERENCES messages(id) ON DELETE SET NULL ON UPDATE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS friend_requests (
+  id TEXT PRIMARY KEY,
+  from_user_id TEXT NOT NULL,
+  to_user_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'accepted', 'rejected')),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  responded_at DATETIME NULL,
+  FOREIGN KEY (from_user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (to_user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS friend_edges (
+  user_id TEXT NOT NULL,
+  friend_user_id TEXT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, friend_user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (friend_user_id) REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_room_memberships_user_id
   ON room_memberships (user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email
+  ON users (email);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_nickname
+  ON users (nickname);
 
 CREATE INDEX IF NOT EXISTS idx_messages_room_sent_at
   ON messages (room_id, sent_at);
@@ -70,3 +98,12 @@ CREATE INDEX IF NOT EXISTS idx_room_read_states_user_id
 
 CREATE INDEX IF NOT EXISTS idx_room_read_states_room_user
   ON room_read_states (room_id, user_id);
+
+CREATE INDEX IF NOT EXISTS idx_friend_requests_to_status
+  ON friend_requests (to_user_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_friend_requests_from_status
+  ON friend_requests (from_user_id, status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_friend_edges_friend_user_id
+  ON friend_edges (friend_user_id);

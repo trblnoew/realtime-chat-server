@@ -7,9 +7,14 @@ erDiagram
   rooms ||--o{ room_memberships : has
   users ||--o{ messages : sends
   rooms ||--o{ messages : contains
+  users ||--o{ friend_requests : sends
+  users ||--o{ friend_requests : receives
+  users ||--o{ friend_edges : has
 
   users {
     text id PK
+    text email unique
+    text nickname unique
     datetime created_at
   }
 
@@ -40,6 +45,21 @@ erDiagram
     text file_data_url nullable
     datetime sent_at
   }
+
+  friend_requests {
+    text id PK
+    text from_user_id FK
+    text to_user_id FK
+    text status "pending|accepted|rejected"
+    datetime created_at
+    datetime responded_at nullable
+  }
+
+  friend_edges {
+    text user_id PK,FK
+    text friend_user_id PK,FK
+    datetime created_at
+  }
 ```
 
 ## Notes
@@ -49,3 +69,4 @@ erDiagram
 - `messages` has unique keys for reliability:
   - `(room_id, seq)` for ordering
   - `(room_id, user_id, client_msg_id)` for idempotency
+- `friend_requests` drives request state transitions; accepted requests create two `friend_edges` rows.

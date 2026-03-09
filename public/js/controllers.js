@@ -1,7 +1,8 @@
 import { elements } from './dom.js';
 import {
   state,
-  AUTH_COOKIE_KEY,
+  AUTH_TOKEN_KEY,
+  AUTH_ERROR_KEY,
   isDmRoomId,
   getViewerId,
   toShortPreview,
@@ -12,6 +13,7 @@ import {
   getOutboxForRoom,
   getRoomMessageStore,
   getMessageKey,
+  getUserDisplayName,
 } from './state.js';
 import * as api from './api.js';
 import {
@@ -21,6 +23,9 @@ import {
   clearJoinedRooms,
   emitMessageSend,
   emitMessageResync,
+  setSocketAuthToken,
+  connectSocket,
+  disconnectSocket,
 } from './socket.js';
 import {
   isNearBottom,
@@ -31,34 +36,66 @@ import {
   renderInviteAlarms,
   renderDmList,
   resetDmRenderCache,
+  renderFriendRequests,
 } from './renderers.js';
-import { parseRoute, createRouter } from './router.js';
+import { parseRoute, buildPath, createRouter } from './router.js';
 
-function getCookie(name) {
-  const value = `; ${document.cookie}`;
-  const parts = value.split(`; ${name}=`);
-  if (parts.length === 2) return parts.pop().split(';').shift();
-  return '';
+function getStoredAccessToken() {
+  return String(localStorage.getItem(AUTH_TOKEN_KEY) || '').trim();
 }
 
-function setCookie(name, value) {
-  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; samesite=lax`;
+function storeAccessToken(token) {
+  const value = String(token || '').trim();
+  if (!value) {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    return;
+  }
+  localStorage.setItem(AUTH_TOKEN_KEY, value);
 }
 
-function clearCookie(name) {
-  document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+function rememberAuthError(message) {
+  const value = String(message || '').trim();
+  if (!value) return;
+  sessionStorage.setItem(AUTH_ERROR_KEY, value);
 }
 
 function setAuthMessage(value) {
-  elements.authMessage.textContent = value;
+  if (elements.authMessage) {
+    elements.authMessage.textContent = value;
+  }
 }
 
 function setSocialStatus(value) {
   elements.socialStatus.textContent = value;
 }
 
-function setBStatus(value) {
-  elements.bStatus.textContent = value;
+function setBStatus(value, tone = 'info') {
+  const message = String(value || '').trim();
+  elements.bStatus.textContent = message;
+  elements.bStatus.classList.remove('warn');
+  if (message && tone === 'warn') {
+    elements.bStatus.classList.add('warn');
+  }
+}
+
+function setAReadOnlyMode(readOnly) {
+  const disabled = Boolean(readOnly);
+  elements.text.disabled = disabled;
+  elements.pickFileBtn.disabled = disabled;
+  elements.send.disabled = disabled;
+  elements.aActionBtn.disabled = disabled;
+}
+
+function isAllowedAppPath(path) {
+  const value = String(path || '').trim();
+  return value === '/rt' || value.startsWith('/a/') || value.startsWith('/b/');
+}
+
+function redirectToLogin(nextPath) {
+  const fallbackPath = '/rt';
+  const normalizedNext = isAllowedAppPath(nextPath) ? nextPath : fallbackPath;
+  const query = `?next=${encodeURIComponent(normalizedNext)}`;
+  location.assign(`/login${query}`);
 }
 
 const ACK_TIMEOUT_MS = 3000;
@@ -262,8 +299,10 @@ function renderActionTab() {
   );
 }
 
-function syncUserName() {
-  socket.emit('set_user', { userId: state.currentUserId || undefined });
+function syncSocketAuthToken() {
+  const token = getStoredAccessToken();
+  api.setAccessToken(token);
+  setSocketAuthToken(token);
 }
 
 function getActorId() {
@@ -275,28 +314,31 @@ function getActorId() {
   return value;
 }
 
-function applyLoggedInState(userIdValue) {
+function applyLoggedInState(user) {
+  const userIdValue = String(user?.id || '').trim();
+  if (!userIdValue) return;
   state.currentUserId = userIdValue;
-  elements.userId.value = userIdValue;
-  elements.userId.readOnly = true;
-  elements.authCard.classList.add('hidden');
-  elements.sessionUserLabel.textContent = `Logged in as ${userIdValue}`;
+  const nickname = String(user?.nickname || '').trim();
+  const email = String(user?.email || '').trim();
+  const label = nickname || email || userIdValue;
+  elements.sessionUserLabel.textContent = `Logged in as ${label}`;
   setAuthMessage('');
-  syncUserName();
+  syncSocketAuthToken();
 }
 
 function applyLoggedOutState() {
   clearAllPendingTimers();
   resetLoggedOutState();
-  elements.userId.value = '';
-  elements.userId.readOnly = true;
-  elements.authCard.classList.remove('hidden');
+  setAReadOnlyMode(true);
   elements.sessionUserLabel.textContent = 'Not logged in';
-  setAuthMessage('Login required to enter chat.');
+  setAuthMessage('Login required.');
 
   elements.roomList.innerHTML = '';
   elements.bFriendList.innerHTML = '';
   elements.bDmList.innerHTML = '';
+  elements.bIncomingFriendRequestList.innerHTML = '';
+  elements.bOutgoingFriendRequestList.innerHTML = '';
+  elements.bRequestBadge.classList.add('hidden');
   elements.bDmSearchInput.value = '';
   elements.messages.innerHTML = '';
   elements.bMessages.innerHTML = '';
@@ -306,6 +348,43 @@ function applyLoggedOutState() {
   elements.bJumpLatest.classList.add('hidden');
   renderInviteAlarms({ onAccept: acceptInviteAction, onReject: rejectInviteAction });
   resetDmRenderCache();
+}
+
+async function hydrateUserProfiles() {
+  try {
+    const data = await api.getUsers();
+    state.userProfileById.clear();
+    (data.users || []).forEach((user) => {
+      const id = String(user?.id || '').trim();
+      if (!id) return;
+      state.userProfileById.set(id, {
+        nickname: String(user?.nickname || '').trim(),
+        email: String(user?.email || '').trim(),
+      });
+    });
+  } catch {
+    // noop
+  }
+}
+
+function hasMissingUserProfiles(users) {
+  return (users || []).some((entry) => {
+    const id = String(entry?.userId || '').trim();
+    return id && !state.userProfileById.has(id);
+  });
+}
+
+function showAEmptyState(message = 'No channel available') {
+  state.activeRoomId = '';
+  elements.currentRoom.textContent = 'Current room: -';
+  elements.chatRoomTitle.textContent = '# no-channel';
+  elements.text.value = '';
+  elements.text.placeholder = 'No channel available';
+  elements.messages.innerHTML = '';
+  elements.selectedFileLabel.textContent = '';
+  elements.jumpLatest.classList.add('hidden');
+  setAReadOnlyMode(true);
+  setSocialStatus(message);
 }
 
 function normalizeRooms(rooms) {
@@ -320,11 +399,6 @@ function normalizeRooms(rooms) {
 async function loadRoomLogs(roomId, limit = 100) {
   const data = await api.getRoomMessages(roomId, limit);
   return data.messages || [];
-}
-
-function redirectToRtWithMessage(message) {
-  setAuthMessage(message || 'Login required.');
-  return router.navigateTo({ mode: 'RT' }, { replace: true });
 }
 
 async function refreshRooms() {
@@ -364,10 +438,14 @@ async function refreshRooms() {
 
 async function refreshFriends() {
   const actor = getActorId();
-  if (!actor) return [];
+  if (!actor) {
+    state.cachedFriendIds.clear();
+    return [];
+  }
 
   const data = await api.getFriends(actor);
   const friends = data.friends || [];
+  state.cachedFriendIds = new Set(friends);
 
   elements.bFriendList.innerHTML = '';
   if (!friends.length) {
@@ -379,24 +457,74 @@ async function refreshFriends() {
     const li = document.createElement('li');
     li.className = 'friend-row';
 
-    const name = document.createElement('span');
-    name.className = 'friend-name';
-    name.textContent = friendId;
-
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'tiny-btn';
-    btn.textContent = 'DM';
-    btn.addEventListener('click', async () => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'friend-item-btn';
+    button.title = 'Click to open DM';
+    button.textContent = `@ ${getUserDisplayName(friendId)}`;
+    button.addEventListener('click', async () => {
       await router.navigateTo({ mode: 'B', peerUserId: friendId });
     });
 
-    li.appendChild(name);
-    li.appendChild(btn);
+    li.appendChild(button);
     elements.bFriendList.appendChild(li);
   });
 
   return friends;
+}
+
+async function refreshFriendRequests() {
+  const actor = getActorId();
+  if (!actor) {
+    state.incomingFriendRequests = [];
+    state.outgoingFriendRequests = [];
+    renderFriendRequests({
+      incoming: [],
+      outgoing: [],
+      onAccept: acceptFriendRequestAction,
+      onReject: rejectFriendRequestAction,
+    });
+    return;
+  }
+
+  const [incomingData, outgoingData] = await Promise.all([
+    api.getIncomingFriendRequests(),
+    api.getOutgoingFriendRequests(),
+  ]);
+  state.incomingFriendRequests = incomingData.requests || [];
+  state.outgoingFriendRequests = outgoingData.requests || [];
+  state.friendRequestBadgeCount = state.incomingFriendRequests.length;
+  renderFriendRequests({
+    incoming: state.incomingFriendRequests,
+    outgoing: state.outgoingFriendRequests,
+    onAccept: acceptFriendRequestAction,
+    onReject: rejectFriendRequestAction,
+  });
+}
+
+async function acceptFriendRequestAction(requestId) {
+  if (!requestId) return;
+  try {
+    await api.acceptFriendRequest(requestId);
+    await hydrateUserProfiles();
+    await refreshFriendRequests();
+    await refreshFriends();
+    await refreshDmRooms();
+    setBStatus('Friend request accepted.');
+  } catch (error) {
+    setBStatus(error.message, 'warn');
+  }
+}
+
+async function rejectFriendRequestAction(requestId) {
+  if (!requestId) return;
+  try {
+    await api.rejectFriendRequest(requestId);
+    await refreshFriendRequests();
+    setBStatus('Friend request rejected.');
+  } catch (error) {
+    setBStatus(error.message, 'warn');
+  }
 }
 
 function joinAllDmRooms(dmRooms) {
@@ -486,6 +614,7 @@ async function enterRoom(roomIdValue, options = {}) {
   if (!roomId) return;
 
   state.activeRoomId = roomId;
+  setAReadOnlyMode(false);
   elements.currentRoom.textContent = `Current room: ${roomId}`;
   elements.chatRoomTitle.textContent = `# ${roomId}`;
   elements.text.placeholder = `Message #${roomId}`;
@@ -509,8 +638,15 @@ async function enterDmRoom(roomIdValue, peerUserId, options = {}) {
   if (!roomId) return;
 
   state.activeDmRoomId = roomId;
-  elements.bChatTitle.textContent = `@ ${peerUserId}`;
-  elements.bText.placeholder = `Message @${peerUserId}`;
+  const normalizedPeerUserId = String(peerUserId || '').trim();
+  const isFriend = state.cachedFriendIds.has(normalizedPeerUserId);
+  const peerLabel = getUserDisplayName(normalizedPeerUserId);
+  elements.bChatTitle.textContent = `@ ${getUserDisplayName(normalizedPeerUserId)}`;
+  elements.bText.placeholder = `Message @${peerLabel}`;
+  setBStatus(
+    isFriend ? '' : 'You have not added this user as a friend yet.',
+    isFriend ? 'info' : 'warn',
+  );
   joinRoomIfNeeded(roomId);
 
   const logs = await loadRoomLogs(roomId);
@@ -540,15 +676,16 @@ async function submitActionTab() {
 
   try {
     if (state.activeActionTab === 'friend') {
-      const friendId = elements.actionFriendIdInput.value.trim();
-      if (!friendId) {
-        setActionError('friend userId is required');
+      const friendNickname = elements.actionFriendNicknameInput.value.trim();
+      if (!friendNickname) {
+        setActionError('friend nickname is required');
         return;
       }
-      await api.addFriend(actor, friendId);
-      elements.actionFriendIdInput.value = '';
-      await refreshFriends();
-      setBStatus(`Friend added: ${friendId}`);
+      await api.createFriendRequest(friendNickname);
+      elements.actionFriendNicknameInput.value = '';
+      await hydrateUserProfiles();
+      await refreshFriendRequests();
+      setBStatus(`Request sent to @${friendNickname}`);
     }
 
     if (state.activeActionTab === 'room') {
@@ -566,13 +703,13 @@ async function submitActionTab() {
     if (state.activeActionTab === 'invite') {
       const roomIdValue =
         elements.actionInviteRoomInput.value.trim() || state.activeRoomId || 'lobby';
-      const toUserId = elements.actionInviteToInput.value.trim();
-      if (!toUserId) {
-        setActionError('to userId is required');
+      const toNickname = elements.actionInviteToNicknameInput.value.trim();
+      if (!toNickname) {
+        setActionError('to nickname is required');
         return;
       }
-      const data = await api.inviteToRoom(roomIdValue, actor, toUserId);
-      elements.actionInviteToInput.value = '';
+      const data = await api.inviteToRoom(roomIdValue, toNickname);
+      elements.actionInviteToNicknameInput.value = '';
       setSocialStatus(`Invite sent: ${data.invite.id.slice(0, 8)}`);
     }
 
@@ -622,8 +759,8 @@ function addDmMessage(payload) {
 }
 
 async function handleRoute(route) {
-  if (!state.currentUserId && route.mode !== 'RT') {
-    await redirectToRtWithMessage('Login required before entering chat.');
+  if (!state.currentUserId) {
+    redirectToLogin(buildPath(route));
     return;
   }
 
@@ -639,20 +776,14 @@ async function handleRoute(route) {
     const requested = route.roomId || channels[0]?.roomId;
 
     if (!requested) {
-      elements.currentRoom.textContent = 'Current room: -';
-      elements.chatRoomTitle.textContent = '# no-channel';
-      elements.messages.innerHTML = '';
-      setSocialStatus('No channel available. Create one first.');
-      await router.navigateTo({ mode: 'RT' }, { replace: true, silent: true });
-      setMode('RT');
+      showAEmptyState('No channel available');
       return;
     }
 
     const exists = channels.some((room) => room.roomId === requested);
     const fallbackRoomId = exists ? requested : channels[0]?.roomId;
     if (!fallbackRoomId) {
-      await router.navigateTo({ mode: 'RT' }, { replace: true, silent: true });
-      setMode('RT');
+      showAEmptyState('No channel available');
       return;
     }
 
@@ -670,6 +801,7 @@ async function handleRoute(route) {
   if (route.mode === 'B') {
     setMode('B');
     setBDrawerOpen(false);
+    await refreshFriendRequests();
     await refreshFriends();
     let dmRooms = await refreshDmRooms();
 
@@ -695,7 +827,7 @@ async function handleRoute(route) {
     if (!target) {
       elements.bMessages.innerHTML = '';
       elements.bChatTitle.textContent = '@ select-friend';
-      setBStatus('No DM room available. Add a friend first.');
+      setBStatus('No DM room available. Add a friend first.', 'warn');
       return;
     }
 
@@ -714,20 +846,26 @@ const router = createRouter({
 });
 
 async function bootstrapAuth() {
-  const saved = decodeURIComponent(getCookie(AUTH_COOKIE_KEY) || '');
+  const saved = getStoredAccessToken();
   if (!saved) {
+    api.clearAccessToken();
+    setSocketAuthToken('');
     applyLoggedOutState();
     return false;
   }
 
   try {
-    const userIdValue = await api.login(saved);
-    applyLoggedInState(userIdValue);
-    setCookie(AUTH_COOKIE_KEY, userIdValue);
+    api.setAccessToken(saved);
+    setSocketAuthToken(saved);
+    const data = await api.me();
+    applyLoggedInState(data.user);
     await refreshInvites();
     return true;
-  } catch {
-    clearCookie(AUTH_COOKIE_KEY);
+  } catch (error) {
+    rememberAuthError(error?.message || 'Session validation failed');
+    api.clearAccessToken();
+    setSocketAuthToken('');
+    storeAccessToken('');
     applyLoggedOutState();
     return false;
   }
@@ -964,50 +1102,14 @@ function bindEvents() {
     setBDrawerOpen(false);
   });
 
-  elements.signupBtn.addEventListener('click', async () => {
-    const candidate = elements.authUserIdInput.value.trim();
-    if (!candidate) {
-      setAuthMessage('Enter an ID first.');
-      return;
-    }
-
-    try {
-      const userIdValue = await api.signup(candidate);
-      setCookie(AUTH_COOKIE_KEY, userIdValue);
-      applyLoggedInState(userIdValue);
-      setAuthMessage('Signup complete.');
-      await refreshInvites();
-      await router.navigateTo(parseRoute(location.pathname), { replace: true });
-    } catch (error) {
-      setAuthMessage(error.message);
-    }
-  });
-
-  elements.loginBtn.addEventListener('click', async () => {
-    const candidate = elements.authUserIdInput.value.trim();
-    if (!candidate) {
-      setAuthMessage('Enter an ID first.');
-      return;
-    }
-
-    try {
-      const userIdValue = await api.login(candidate);
-      setCookie(AUTH_COOKIE_KEY, userIdValue);
-      applyLoggedInState(userIdValue);
-      setAuthMessage('Login success.');
-      await refreshInvites();
-      await router.navigateTo(parseRoute(location.pathname), { replace: true });
-    } catch (error) {
-      setAuthMessage(error.message);
-    }
-  });
-
   elements.logoutBtn.addEventListener('click', async () => {
-    clearCookie(AUTH_COOKIE_KEY);
-    socket.emit('set_user', { userId: '' });
+    storeAccessToken('');
+    api.clearAccessToken();
+    setSocketAuthToken('');
     clearJoinedRooms();
+    disconnectSocket();
     applyLoggedOutState();
-    await router.navigateTo({ mode: 'RT' }, { replace: true });
+    redirectToLogin('/rt');
   });
 
   elements.rtBtn.addEventListener('click', async () => {
@@ -1016,22 +1118,22 @@ function bindEvents() {
 
   elements.aBtn.addEventListener('click', async () => {
     if (!state.currentUserId) {
-      await redirectToRtWithMessage('Login required before entering chat.');
+      redirectToLogin('/rt');
       return;
     }
 
     const channels = await refreshRooms();
-    if (!channels.length) {
-      setSocialStatus('No channel available. Create one first.');
-      await router.navigateTo({ mode: 'RT' });
+    if (channels.length) {
+      await router.navigateTo({ mode: 'A', roomId: channels[0].roomId });
       return;
     }
-    await router.navigateTo({ mode: 'A', roomId: channels[0].roomId });
+    setMode('A');
+    showAEmptyState('No channel available');
   });
 
   elements.bBtn.addEventListener('click', async () => {
     if (!state.currentUserId) {
-      await redirectToRtWithMessage('Login required before entering DM.');
+      redirectToLogin('/rt');
       return;
     }
 
@@ -1071,7 +1173,7 @@ function bindEvents() {
         ? `Selected: ${state.pendingDmFile.name} (${Math.ceil(state.pendingDmFile.size / 1024)} KB)`
         : '';
     } catch (error) {
-      setBStatus(error.message);
+      setBStatus(error.message, 'warn');
       clearPendingFile('B');
     }
   });
@@ -1097,10 +1199,15 @@ function bindEvents() {
 function bindSocket() {
   bindSocketHandlers({
     onConnect: () => {
-      elements.status.textContent = `Connected as ${socket.id.slice(0, 8)}`;
+      elements.status.textContent = 'Connected';
+      hydrateUserProfiles().catch(() => {
+        // noop
+      });
+      refreshFriendRequests().catch(() => {
+        // noop
+      });
       clearJoinedRooms();
       if (state.currentUserId) {
-        syncUserName();
         if (state.activeRoomId) {
           joinRoomIfNeeded(state.activeRoomId);
           requestResync(state.activeRoomId);
@@ -1169,11 +1276,32 @@ function bindSocket() {
       if (roomId === state.activeDmRoomId) renderActiveDmMessages();
     },
     onOnlineUsers: (users) => {
+      if (hasMissingUserProfiles(users)) {
+        hydrateUserProfiles().then(() => {
+          renderOnlineUsers(users);
+        }).catch(() => {
+          // noop
+        });
+        return;
+      }
       renderOnlineUsers(users);
     },
     onInviteAlarm: (alarm) => {
       upsertInviteAlarm(alarm);
       renderInviteAlarms({ onAccept: acceptInviteAction, onReject: rejectInviteAction });
+    },
+    onFriendRequestNew: () => {
+      refreshFriendRequests().catch(() => {
+        // noop
+      });
+    },
+    onFriendRequestUpdated: () => {
+      Promise.all([
+        refreshFriendRequests(),
+        refreshFriends(),
+      ]).catch(() => {
+        // noop
+      });
     },
   });
 }
@@ -1181,6 +1309,15 @@ function bindSocket() {
 export async function bootstrapApp() {
   bindEvents();
   bindSocket();
+  api.setUnauthorizedHandler((message) => {
+    rememberAuthError(message || 'Unauthorized');
+    storeAccessToken('');
+    api.clearAccessToken();
+    setSocketAuthToken('');
+    disconnectSocket();
+    applyLoggedOutState();
+    redirectToLogin(location.pathname);
+  });
   renderInviteAlarms({ onAccept: acceptInviteAction, onReject: rejectInviteAction });
   applyLoggedOutState();
   setMode('RT');
@@ -1188,15 +1325,18 @@ export async function bootstrapApp() {
   try {
     const ok = await bootstrapAuth();
     if (ok) {
+      await hydrateUserProfiles();
+      await refreshFriendRequests();
+      connectSocket();
       await router.navigateTo(parseRoute(location.pathname), {
         replace: true,
         silent: true,
       });
     } else {
-      await router.navigateTo({ mode: 'RT' }, { replace: true, silent: true });
+      redirectToLogin(location.pathname);
     }
   } catch {
     applyLoggedOutState();
-    await router.navigateTo({ mode: 'RT' }, { replace: true, silent: true });
+    redirectToLogin(location.pathname);
   }
 }

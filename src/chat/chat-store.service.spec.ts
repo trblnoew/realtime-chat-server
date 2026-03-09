@@ -6,6 +6,8 @@ import { RoomEntity } from './entities/room.entity';
 import { RoomMembershipEntity } from './entities/room-membership.entity';
 import { RoomReadStateEntity } from './entities/room-read-state.entity';
 import { UserEntity } from './entities/user.entity';
+import { FriendRequestEntity } from './entities/friend-request.entity';
+import { FriendEdgeEntity } from './entities/friend-edge.entity';
 
 describe('ChatStoreService', () => {
   let dataSource: DataSource;
@@ -22,6 +24,8 @@ describe('ChatStoreService', () => {
         RoomMembershipEntity,
         MessageEntity,
         RoomReadStateEntity,
+        FriendRequestEntity,
+        FriendEdgeEntity,
       ],
     });
     await dataSource.initialize();
@@ -32,9 +36,14 @@ describe('ChatStoreService', () => {
       dataSource.getRepository(RoomMembershipEntity),
       dataSource.getRepository(MessageEntity),
       dataSource.getRepository(RoomReadStateEntity),
+      dataSource.getRepository(FriendRequestEntity),
+      dataSource.getRepository(FriendEdgeEntity),
     );
 
-    await dataSource.getRepository(UserEntity).save([{ id: 'alice' }, { id: 'bob' }]);
+    await dataSource.getRepository(UserEntity).save([
+      { id: 'alice', email: 'alice@test.com', nickname: 'alice' },
+      { id: 'bob', email: 'bob@test.com', nickname: 'bob' },
+    ]);
     await dataSource
       .getRepository(RoomEntity)
       .save({ id: 'lobby', ownerUserId: 'alice', isPrivate: true });
@@ -98,5 +107,44 @@ describe('ChatStoreService', () => {
     );
     expect(after).toHaveLength(1);
     expect(after[0].text).toBe('two');
+  });
+
+  it('resolves user id by nickname', async () => {
+    await expect(service.getUserIdByNicknameOrThrow('alice')).resolves.toBe('alice');
+    await expect(service.getUserIdByNicknameOrThrow('unknown')).rejects.toThrow(
+      'nickname not found',
+    );
+  });
+
+  it('validates signup profile availability before external signup', async () => {
+    await expect(
+      service.assertSignupProfileAvailable('new@test.com', 'newbie'),
+    ).resolves.toBeUndefined();
+    await expect(
+      service.assertSignupProfileAvailable('alice@test.com', 'newbie'),
+    ).rejects.toThrow('email already used');
+    await expect(
+      service.assertSignupProfileAvailable('new@test.com', 'alice'),
+    ).rejects.toThrow('nickname already used');
+  });
+
+  it('creates pending request and accepts to form bidirectional friendship', async () => {
+    const created = await service.createFriendRequest('alice', 'bob');
+    expect(created.status).toBe('pending');
+
+    const accepted = await service.acceptFriendRequest(created.id, 'bob');
+    expect(accepted.status).toBe('accepted');
+
+    const aliceFriends = await service.getFriends('alice');
+    const bobFriends = await service.getFriends('bob');
+    expect(aliceFriends).toContain('bob');
+    expect(bobFriends).toContain('alice');
+  });
+
+  it('rejects duplicate pending request for same pair', async () => {
+    await service.createFriendRequest('alice', 'bob');
+    await expect(service.createFriendRequest('alice', 'bob')).rejects.toThrow(
+      'Pending friend request already exists',
+    );
   });
 });

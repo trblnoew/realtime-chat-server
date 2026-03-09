@@ -6,11 +6,15 @@ import { ChatGateway } from './chat.gateway';
 import { RealtimeNotifyService } from './realtime-notify.service';
 import { ChatStoreService } from './chat-store.service';
 import { ChatService } from './chat.service';
+import { SupabaseAuthService } from '../auth/supabase-auth.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { MessageEntity } from './entities/message.entity';
 import { RoomEntity } from './entities/room.entity';
 import { RoomMembershipEntity } from './entities/room-membership.entity';
 import { RoomReadStateEntity } from './entities/room-read-state.entity';
 import { UserEntity } from './entities/user.entity';
+import { FriendRequestEntity } from './entities/friend-request.entity';
+import { FriendEdgeEntity } from './entities/friend-edge.entity';
 
 @Module({
   imports: [
@@ -20,9 +24,18 @@ import { UserEntity } from './entities/user.entity';
       RoomMembershipEntity,
       MessageEntity,
       RoomReadStateEntity,
+      FriendRequestEntity,
+      FriendEdgeEntity,
     ]),
   ],
   controllers: [AuthController, ChatController],
-  providers: [ChatGateway, ChatService, ChatStoreService, RealtimeNotifyService],
+  providers: [
+    ChatGateway,
+    ChatService,
+    ChatStoreService,
+    RealtimeNotifyService,
+    SupabaseAuthService,
+    JwtAuthGuard,
+  ],
 })
 export class ChatModule {}

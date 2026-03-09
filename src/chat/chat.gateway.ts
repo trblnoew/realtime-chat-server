@@ -16,6 +16,7 @@ import { ChatService } from './chat.service';
 import { MessageDto } from './dto/message.dto';
 import { ChatStoreService } from './chat-store.service';
 import { RealtimeNotifyService } from './realtime-notify.service';
+import { SupabaseAuthService } from '../auth/supabase-auth.service';
 
 @WebSocketGateway({ cors: { origin: '*' } })
 export class ChatGateway
@@ -31,13 +32,27 @@ export class ChatGateway
     private readonly chatService: ChatService,
     private readonly chatStore: ChatStoreService,
     private readonly realtimeNotify: RealtimeNotifyService,
+    private readonly supabaseAuth: SupabaseAuthService,
   ) {}
 
   afterInit() {
     this.realtimeNotify.attachServer(this.server);
   }
 
-  handleConnection(_client: Socket) {
+  async handleConnection(client: Socket) {
+    try {
+      const token = this.extractSocketToken(client);
+      const verified = await this.supabaseAuth.verifyJwt(token);
+      client.data.userId = verified.sub;
+      this.onlineUsers.set(client.id, verified.sub);
+      this.realtimeNotify.registerSocket(verified.sub, client.id);
+    } catch (error) {
+      this.logger.warn(
+        `Socket auth rejected: ${(error as Error).message || 'unknown error'}`,
+      );
+      client.disconnect(true);
+      return;
+    }
     this.emitOnlineUsers();
   }
 
@@ -77,7 +92,7 @@ export class ChatGateway
     @ConnectedSocket() client: Socket,
   ) {
     try {
-      const effectiveUserId = this.onlineUsers.get(client.id);
+      const effectiveUserId = this.getSocketUserId(client);
       if (!effectiveUserId) {
         throw new WsException('Login required');
       }
@@ -106,7 +121,7 @@ export class ChatGateway
   ) {
     try {
       const roomId = (data.roomId ?? 'lobby').trim() || 'lobby';
-      const effectiveUserId = this.onlineUsers.get(client.id);
+      const effectiveUserId = this.getSocketUserId(client);
       if (!effectiveUserId) {
         throw new WsException('Login required');
       }
@@ -119,36 +134,8 @@ export class ChatGateway
   }
 
   @SubscribeMessage('set_user')
-  async handleSetUser(
-    @MessageBody() data: { userId?: string },
-    @ConnectedSocket() client: Socket,
-  ) {
-    const previousUserId = this.onlineUsers.get(client.id);
-    const nextUserId = (data.userId ?? '').trim();
-
-    if (!nextUserId) {
-      if (previousUserId) {
-        this.realtimeNotify.unregisterSocket(previousUserId, client.id);
-        this.onlineUsers.delete(client.id);
-      }
-      this.emitOnlineUsers();
-      return { event: 'user_cleared' };
-    }
-
-    try {
-      await this.chatStore.loginUser(nextUserId);
-    } catch (error) {
-      throw new WsException((error as Error).message);
-    }
-    if (previousUserId && previousUserId !== nextUserId) {
-      this.realtimeNotify.moveSocket(previousUserId, nextUserId, client.id);
-    }
-    if (!previousUserId) {
-      this.realtimeNotify.registerSocket(nextUserId, client.id);
-    }
-    this.onlineUsers.set(client.id, nextUserId);
-    this.emitOnlineUsers();
-    return { event: 'user_updated' };
+  async handleSetUser() {
+    return { event: 'deprecated', message: 'Socket identity is derived from JWT' };
   }
 
   private async processMessageSend(
@@ -156,7 +143,7 @@ export class ChatGateway
     client: Socket,
   ) {
     try {
-      const effectiveUserId = this.onlineUsers.get(client.id);
+      const effectiveUserId = this.getSocketUserId(client);
       if (!effectiveUserId) {
         throw new WsException('Login required');
       }
@@ -205,5 +192,26 @@ export class ChatGateway
 
   private logCounter(metric: string, roomId: string) {
     this.logger.log(JSON.stringify({ metric, roomId, at: new Date().toISOString() }));
+  }
+
+  private extractSocketToken(client: Socket) {
+    const authToken = String(client.handshake.auth?.token || '').trim();
+    const headerToken = String(client.handshake.headers?.authorization || '').trim();
+    const candidate = authToken || headerToken;
+    if (!candidate) {
+      throw new WsException('Missing socket token');
+    }
+    if (candidate.toLowerCase().startsWith('bearer ')) {
+      return candidate.slice('bearer '.length).trim();
+    }
+    return candidate;
+  }
+
+  private getSocketUserId(client: Socket) {
+    const fromData = String(client.data?.userId || '').trim();
+    if (fromData) {
+      return fromData;
+    }
+    return this.onlineUsers.get(client.id);
   }
 }

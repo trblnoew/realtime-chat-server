@@ -2,6 +2,7 @@ import { elements } from './dom.js';
 import {
   state,
   getViewerId,
+  getUserDisplayName,
   toShortPreview,
   getUnreadCount,
   getInviteId,
@@ -19,6 +20,7 @@ export function scrollToLatest(container) {
 export function createMessageNode(payload) {
   const mine = payload.userId === getViewerId();
   const role = mine ? 'me' : 'peer';
+  const senderLabel = mine ? 'me' : getUserDisplayName(payload.userId);
 
   const wrapper = document.createElement('article');
   wrapper.className = `msg ${role}`;
@@ -52,10 +54,10 @@ export function createMessageNode(payload) {
   const meta = document.createElement('div');
   meta.className = 'meta';
   if (payload.pendingStatus) {
-    meta.textContent = `${payload.userId} - ${payload.pendingStatus}`;
+    meta.textContent = `${senderLabel} - ${payload.pendingStatus}`;
     wrapper.classList.add('pending');
   } else {
-    meta.textContent = `${payload.userId} - ${new Date(payload.sentAt).toLocaleTimeString()}`;
+    meta.textContent = `${senderLabel} - ${new Date(payload.sentAt).toLocaleTimeString()}`;
   }
   bubble.appendChild(meta);
   wrapper.appendChild(bubble);
@@ -99,7 +101,7 @@ export function renderOnlineUsers(users) {
   users.forEach((entry) => {
     const item = document.createElement('li');
     item.className = `online-item${entry.userId === state.currentUserId ? ' me' : ''}`;
-    item.textContent = entry.userId;
+    item.textContent = getUserDisplayName(entry.userId);
     elements.onlineUsers.appendChild(item);
   });
 }
@@ -177,9 +179,10 @@ let previousDmSignature = '';
 
 export function renderDmList(dmRooms, onSelectDm) {
   const query = state.bDmSearchQuery.trim().toLowerCase();
-  const filtered = dmRooms.filter((room) =>
-    room.peerUserId.toLowerCase().includes(query),
-  );
+  const filtered = dmRooms.filter((room) => {
+    const nickname = String(getUserDisplayName(room.peerUserId) || '').toLowerCase();
+    return nickname.includes(query);
+  });
 
   const nextSignature = dmSignature(filtered);
   if (nextSignature === previousDmSignature) {
@@ -209,7 +212,7 @@ export function renderDmList(dmRooms, onSelectDm) {
     const main = document.createElement('div');
     main.className = 'b-dm-main';
     const label = document.createElement('span');
-    label.textContent = `@ ${room.peerUserId}`;
+    label.textContent = `@ ${getUserDisplayName(room.peerUserId)}`;
     main.appendChild(label);
 
     const unread = getUnreadCount(room);
@@ -233,4 +236,89 @@ export function renderDmList(dmRooms, onSelectDm) {
 
 export function resetDmRenderCache() {
   previousDmSignature = '';
+}
+
+export function renderFriendRequests({
+  incoming,
+  outgoing,
+  onAccept,
+  onReject,
+}) {
+  elements.bIncomingFriendRequestList.innerHTML = '';
+  elements.bOutgoingFriendRequestList.innerHTML = '';
+
+  const incomingList = incoming || [];
+  const outgoingList = outgoing || [];
+
+  const pendingCount = incomingList.length;
+  if (pendingCount > 0) {
+    elements.bRequestBadge.textContent = pendingCount > 99 ? '99+' : String(pendingCount);
+    elements.bRequestBadge.classList.remove('hidden');
+  } else {
+    elements.bRequestBadge.classList.add('hidden');
+  }
+
+  if (!incomingList.length) {
+    renderSimpleList(elements.bIncomingFriendRequestList, [], 'No incoming requests');
+  } else {
+    incomingList.forEach((requestItem) => {
+      const li = document.createElement('li');
+      li.className = 'request-row';
+
+      const head = document.createElement('div');
+      head.className = 'request-row-head';
+      head.textContent = `@ ${getUserDisplayName(requestItem.fromUserId)}`;
+
+      const meta = document.createElement('div');
+      meta.className = 'request-row-meta';
+      meta.textContent = new Date(requestItem.createdAt).toLocaleString();
+
+      const actions = document.createElement('div');
+      actions.className = 'request-row-actions';
+
+      const accept = document.createElement('button');
+      accept.type = 'button';
+      accept.className = 'request-action-btn accept';
+      accept.textContent = 'Accept';
+      accept.addEventListener('click', async () => {
+        await onAccept(requestItem.id);
+      });
+
+      const reject = document.createElement('button');
+      reject.type = 'button';
+      reject.className = 'request-action-btn reject';
+      reject.textContent = 'Reject';
+      reject.addEventListener('click', async () => {
+        await onReject(requestItem.id);
+      });
+
+      actions.appendChild(accept);
+      actions.appendChild(reject);
+      li.appendChild(head);
+      li.appendChild(meta);
+      li.appendChild(actions);
+      elements.bIncomingFriendRequestList.appendChild(li);
+    });
+  }
+
+  if (!outgoingList.length) {
+    renderSimpleList(elements.bOutgoingFriendRequestList, [], 'No outgoing requests');
+  } else {
+    outgoingList.forEach((requestItem) => {
+      const li = document.createElement('li');
+      li.className = 'request-row';
+
+      const head = document.createElement('div');
+      head.className = 'request-row-head';
+      head.textContent = `@ ${getUserDisplayName(requestItem.toUserId)}`;
+
+      const meta = document.createElement('div');
+      meta.className = 'request-row-meta';
+      meta.textContent = `Pending · ${new Date(requestItem.createdAt).toLocaleString()}`;
+
+      li.appendChild(head);
+      li.appendChild(meta);
+      elements.bOutgoingFriendRequestList.appendChild(li);
+    });
+  }
 }

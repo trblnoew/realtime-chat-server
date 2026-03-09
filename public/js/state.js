@@ -1,4 +1,5 @@
-export const AUTH_COOKIE_KEY = 'rt_auth_user';
+export const AUTH_TOKEN_KEY = 'rt_access_token';
+export const AUTH_ERROR_KEY = 'rt_auth_error';
 
 export const state = {
   userSyncTimer: null,
@@ -22,6 +23,11 @@ export const state = {
   pendingOutboxByRoom: new Map(),
   lastSeqByRoom: new Map(),
   roomMessagesByRoom: new Map(),
+  userProfileById: new Map(),
+  cachedFriendIds: new Set(),
+  incomingFriendRequests: [],
+  outgoingFriendRequests: [],
+  friendRequestBadgeCount: 0,
 };
 
 export function isDmRoomId(roomId) {
@@ -30,6 +36,15 @@ export function isDmRoomId(roomId) {
 
 export function getViewerId() {
   return (state.currentUserId || '').trim();
+}
+
+export function getUserDisplayName(userId) {
+  const id = String(userId || '').trim();
+  if (!id) return '';
+  const profile = state.userProfileById.get(id);
+  const nickname = String(profile?.nickname || '').trim();
+  if (nickname) return nickname;
+  return 'Unknown';
 }
 
 export function getInviteId(invite) {
@@ -100,6 +115,11 @@ export function resetLoggedOutState() {
   state.pendingOutboxByRoom.clear();
   state.lastSeqByRoom.clear();
   state.roomMessagesByRoom.clear();
+  state.userProfileById.clear();
+  state.cachedFriendIds.clear();
+  state.incomingFriendRequests = [];
+  state.outgoingFriendRequests = [];
+  state.friendRequestBadgeCount = 0;
   resetJoinedRooms();
   clearInvites();
 }

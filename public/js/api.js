@@ -1,8 +1,27 @@
+let accessToken = '';
+let unauthorizedHandler = null;
+
+export function setAccessToken(token) {
+  accessToken = String(token || '').trim();
+}
+
+export function clearAccessToken() {
+  accessToken = '';
+}
+
+export function setUnauthorizedHandler(handler) {
+  unauthorizedHandler = typeof handler === 'function' ? handler : null;
+}
+
 export async function apiRequest(path, method, body) {
+  const headers = body ? { 'Content-Type': 'application/json' } : {};
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+
   const response = await fetch(path, {
     method,
-    credentials: 'same-origin',
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
 
@@ -13,21 +32,33 @@ export async function apiRequest(path, method, body) {
     payload = {};
   }
 
+  const message = payload.message || payload.msg || payload.error_description || response.statusText || 'Request failed';
+
+  if (response.status === 401 && unauthorizedHandler) {
+    unauthorizedHandler(Array.isArray(message) ? message.join(', ') : String(message));
+  }
+
   if (!response.ok) {
-    const message = payload.message || response.statusText || 'Request failed';
     throw new Error(Array.isArray(message) ? message.join(', ') : message);
   }
   return payload;
 }
 
-export async function signup(userId) {
-  const data = await apiRequest('/auth/signup', 'POST', { userId });
-  return data.userId;
+export async function signup(email, password, nickname) {
+  const data = await apiRequest('/auth/signup', 'POST', { email, password, nickname });
+  return data.user;
 }
 
-export async function login(userId) {
-  const data = await apiRequest('/auth/login', 'POST', { userId });
-  return data.userId;
+export async function login(email, password) {
+  return apiRequest('/auth/login', 'POST', { email, password });
+}
+
+export async function me() {
+  return apiRequest('/auth/me', 'GET');
+}
+
+export async function getUsers() {
+  return apiRequest('/auth/users', 'GET');
 }
 
 export async function getRooms() {
@@ -50,8 +81,8 @@ export async function createRoom(roomId, ownerUserId) {
   return apiRequest('/social/rooms', 'POST', { roomId, ownerUserId });
 }
 
-export async function inviteToRoom(roomId, fromUserId, toUserId) {
-  return apiRequest('/social/rooms/invite', 'POST', { roomId, fromUserId, toUserId });
+export async function inviteToRoom(roomId, toNickname) {
+  return apiRequest('/social/rooms/invite', 'POST', { roomId, toNickname });
 }
 
 export async function acceptInvite(inviteId, userId) {
@@ -70,8 +101,34 @@ export async function getFriends(userId) {
   return apiRequest(`/social/friends/${encodeURIComponent(userId)}`, 'GET');
 }
 
-export async function addFriend(userId, friendId) {
-  return apiRequest('/social/friends', 'POST', { userId, friendId });
+export async function addFriend(friendNickname) {
+  return createFriendRequest(friendNickname);
+}
+
+export async function createFriendRequest(toNickname) {
+  return apiRequest('/social/friend-requests', 'POST', { toNickname });
+}
+
+export async function getIncomingFriendRequests() {
+  return apiRequest('/social/friend-requests/incoming', 'GET');
+}
+
+export async function getOutgoingFriendRequests() {
+  return apiRequest('/social/friend-requests/outgoing', 'GET');
+}
+
+export async function acceptFriendRequest(requestId) {
+  return apiRequest(
+    `/social/friend-requests/${encodeURIComponent(requestId)}/accept`,
+    'POST',
+  );
+}
+
+export async function rejectFriendRequest(requestId) {
+  return apiRequest(
+    `/social/friend-requests/${encodeURIComponent(requestId)}/reject`,
+    'POST',
+  );
 }
 
 export async function startDirectMessage(toUserId) {

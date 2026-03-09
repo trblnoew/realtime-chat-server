@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
@@ -16,9 +17,23 @@ import {
 } from './entities/room-membership.entity';
 import { RoomReadStateEntity } from './entities/room-read-state.entity';
 import { UserEntity } from './entities/user.entity';
+import {
+  FriendRequestEntity,
+  FriendRequestStatus,
+} from './entities/friend-request.entity';
+import { FriendEdgeEntity } from './entities/friend-edge.entity';
 
 type InviteStatus = 'pending' | 'accepted' | 'rejected';
 type SaveStatus = 'accepted' | 'duplicate';
+
+export type FriendRequestDto = {
+  id: string;
+  fromUserId: string;
+  toUserId: string;
+  status: FriendRequestStatus;
+  createdAt: string;
+  respondedAt: string | null;
+};
 
 export type ChatMessage = {
   id: string;
@@ -63,9 +78,15 @@ export type DirectRoomSummary = {
   unreadCount: number;
 };
 
+export type AppUser = {
+  id: string;
+  email: string;
+  nickname: string;
+};
+
 @Injectable()
 export class ChatStoreService implements OnModuleInit {
-  private readonly friends = new Map<string, Set<string>>();
+  private readonly logger = new Logger(ChatStoreService.name);
   private readonly invites = new Map<string, RoomInvite>();
 
   constructor(
@@ -79,6 +100,10 @@ export class ChatStoreService implements OnModuleInit {
     private readonly messageRepo: Repository<MessageEntity>,
     @InjectRepository(RoomReadStateEntity)
     private readonly roomReadStateRepo: Repository<RoomReadStateEntity>,
+    @InjectRepository(FriendRequestEntity)
+    private readonly friendRequestRepo: Repository<FriendRequestEntity>,
+    @InjectRepository(FriendEdgeEntity)
+    private readonly friendEdgeRepo: Repository<FriendEdgeEntity>,
   ) {}
 
   async onModuleInit() {
@@ -86,17 +111,150 @@ export class ChatStoreService implements OnModuleInit {
   }
 
   async addFriend(userId: string, friendId: string) {
-    await this.ensureUserExists(userId);
-    await this.ensureUserExists(friendId);
-    if (userId === friendId) {
-      throw new BadRequestException('Cannot add yourself as a friend');
-    }
-    this.addFriendLink(userId, friendId);
-    this.addFriendLink(friendId, userId);
+    this.logger.warn(
+      'addFriend() is deprecated. Use createFriendRequest() for request workflow.',
+    );
+    return this.createFriendRequest(userId, friendId);
   }
 
-  getFriends(userId: string) {
-    return Array.from(this.friends.get(userId) ?? []);
+  async createFriendRequest(fromUserId: string, toUserId: string) {
+    const from = String(fromUserId || '').trim();
+    const to = String(toUserId || '').trim();
+    await this.ensureUserExists(from);
+    await this.ensureUserExists(to);
+    if (!from || !to) {
+      throw new BadRequestException('fromUserId and toUserId are required');
+    }
+    if (from === to) {
+      throw new BadRequestException('Cannot send friend request to yourself');
+    }
+    if (await this.isFriend(from, to)) {
+      throw new BadRequestException('Users are already friends');
+    }
+
+    return this.friendRequestRepo.manager.transaction(async (manager) => {
+      const requestRepo = manager.getRepository(FriendRequestEntity);
+      const existingPending = await requestRepo.findOne({
+        where: [
+          { fromUserId: from, toUserId: to, status: 'pending' },
+          { fromUserId: to, toUserId: from, status: 'pending' },
+        ],
+      });
+      if (existingPending) {
+        throw new BadRequestException('Pending friend request already exists');
+      }
+
+      const created = await requestRepo.save(
+        requestRepo.create({
+          id: randomUUID(),
+          fromUserId: from,
+          toUserId: to,
+          status: 'pending',
+          respondedAt: null,
+        }),
+      );
+      return this.toFriendRequestDto(created);
+    });
+  }
+
+  async acceptFriendRequest(requestId: string, actorUserId: string) {
+    const requestIdValue = String(requestId || '').trim();
+    const actor = String(actorUserId || '').trim();
+    if (!requestIdValue || !actor) {
+      throw new BadRequestException('requestId and actorUserId are required');
+    }
+
+    return this.friendRequestRepo.manager.transaction(async (manager) => {
+      const requestRepo = manager.getRepository(FriendRequestEntity);
+      const edgeRepo = manager.getRepository(FriendEdgeEntity);
+      const request = await requestRepo.findOneBy({ id: requestIdValue });
+      if (!request) {
+        throw new NotFoundException('Friend request not found');
+      }
+      if (request.toUserId !== actor) {
+        throw new ForbiddenException('Only the target user can accept request');
+      }
+      if (request.status !== 'pending') {
+        throw new BadRequestException('Friend request is not pending');
+      }
+
+      request.status = 'accepted';
+      request.respondedAt = new Date();
+      const updated = await requestRepo.save(request);
+
+      await edgeRepo
+        .createQueryBuilder()
+        .insert()
+        .into(FriendEdgeEntity)
+        .values([
+          { userId: request.fromUserId, friendUserId: request.toUserId },
+          { userId: request.toUserId, friendUserId: request.fromUserId },
+        ])
+        .orIgnore()
+        .execute();
+
+      return this.toFriendRequestDto(updated);
+    });
+  }
+
+  async rejectFriendRequest(requestId: string, actorUserId: string) {
+    const requestIdValue = String(requestId || '').trim();
+    const actor = String(actorUserId || '').trim();
+    if (!requestIdValue || !actor) {
+      throw new BadRequestException('requestId and actorUserId are required');
+    }
+    const request = await this.friendRequestRepo.findOneBy({ id: requestIdValue });
+    if (!request) {
+      throw new NotFoundException('Friend request not found');
+    }
+    if (request.toUserId !== actor) {
+      throw new ForbiddenException('Only the target user can reject request');
+    }
+    if (request.status !== 'pending') {
+      throw new BadRequestException('Friend request is not pending');
+    }
+    request.status = 'rejected';
+    request.respondedAt = new Date();
+    const updated = await this.friendRequestRepo.save(request);
+    return this.toFriendRequestDto(updated);
+  }
+
+  async getIncomingFriendRequests(userId: string) {
+    const normalized = String(userId || '').trim();
+    await this.ensureUserExists(normalized);
+    const rows = await this.friendRequestRepo.find({
+      where: { toUserId: normalized, status: 'pending' },
+      order: { createdAt: 'DESC' },
+    });
+    return rows.map((row) => this.toFriendRequestDto(row));
+  }
+
+  async getOutgoingFriendRequests(userId: string) {
+    const normalized = String(userId || '').trim();
+    await this.ensureUserExists(normalized);
+    const rows = await this.friendRequestRepo.find({
+      where: { fromUserId: normalized, status: 'pending' },
+      order: { createdAt: 'DESC' },
+    });
+    return rows.map((row) => this.toFriendRequestDto(row));
+  }
+
+  async getFriends(userId: string) {
+    const normalized = String(userId || '').trim();
+    await this.ensureUserExists(normalized);
+    const rows = await this.friendEdgeRepo.find({
+      where: { userId: normalized },
+      order: { createdAt: 'DESC' },
+    });
+    return rows.map((row) => row.friendUserId);
+  }
+
+  async isFriend(userA: string, userB: string) {
+    const row = await this.friendEdgeRepo.findOneBy({
+      userId: userA,
+      friendUserId: userB,
+    });
+    return Boolean(row);
   }
 
   isDirectRoomId(roomId: string) {
@@ -204,9 +362,9 @@ export class ChatStoreService implements OnModuleInit {
     }));
   }
 
-  ensureFriends(userA: string, userB: string) {
-    const friends = this.friends.get(userA) ?? new Set<string>();
-    if (!friends.has(userB)) {
+  async ensureFriends(userA: string, userB: string) {
+    const allowed = await this.isFriend(userA, userB);
+    if (!allowed) {
       throw new ForbiddenException('Users are not friends');
     }
   }
@@ -217,7 +375,7 @@ export class ChatStoreService implements OnModuleInit {
     if (userA === userB) {
       throw new BadRequestException('Cannot create DM with yourself');
     }
-    this.ensureFriends(userA, userB);
+    await this.ensureFriends(userA, userB);
 
     const roomId = this.toDirectRoomId(userA, userB);
     const existing = await this.roomRepo.findOneBy({ id: roomId });
@@ -307,34 +465,75 @@ export class ChatStoreService implements OnModuleInit {
     }
   }
 
-  async signupUser(userId: string) {
-    const normalized = userId.trim();
-    if (!normalized) {
-      throw new BadRequestException('userId is required');
+  async assertSignupProfileAvailable(email: string, nickname: string) {
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedNickname = String(nickname || '').trim();
+    if (!normalizedEmail || !normalizedNickname) {
+      throw new BadRequestException('email and nickname are required');
     }
-    const existing = await this.userRepo.findOneBy({ id: normalized });
-    if (existing) {
-      throw new BadRequestException('userId already exists');
-    }
-    await this.userRepo.save(this.userRepo.create({ id: normalized }));
-    return { userId: normalized };
+    await this.assertProfileAvailable(normalizedEmail, normalizedNickname);
   }
 
-  async loginUser(userId: string) {
-    const normalized = userId.trim();
-    if (!normalized) {
-      throw new BadRequestException('userId is required');
+  async upsertUserFromAuth(user: { id: string; email: string; nickname: string }) {
+    const id = String(user.id || '').trim();
+    const email = String(user.email || '').trim().toLowerCase();
+    const nickname = String(user.nickname || '').trim();
+    if (!id || !email || !nickname) {
+      throw new BadRequestException('id, email, nickname are required');
     }
-    const existing = await this.userRepo.findOneBy({ id: normalized });
+
+    await this.assertProfileAvailable(email, nickname, id);
+
+    const existing = await this.userRepo.findOneBy({ id });
+    if (existing) {
+      existing.email = email;
+      existing.nickname = nickname;
+      const saved = await this.userRepo.save(existing);
+      return this.toAppUser(saved);
+    }
+
+    const created = await this.userRepo.save(
+      this.userRepo.create({
+        id,
+        email,
+        nickname,
+      }),
+    );
+    return this.toAppUser(created);
+  }
+
+  async getUserById(id: string) {
+    const existing = await this.userRepo.findOneBy({ id: String(id || '').trim() });
     if (!existing) {
-      throw new NotFoundException('userId not found');
+      throw new NotFoundException('user not found');
     }
-    return { userId: normalized };
+    return this.toAppUser(existing);
+  }
+
+  async getUserByEmail(email: string) {
+    const normalized = String(email || '').trim().toLowerCase();
+    const existing = await this.userRepo.findOneBy({ email: normalized });
+    if (!existing) {
+      throw new NotFoundException('user not found');
+    }
+    return this.toAppUser(existing);
+  }
+
+  async getUserIdByNicknameOrThrow(nickname: string) {
+    const normalized = String(nickname || '').trim();
+    if (!normalized) {
+      throw new BadRequestException('nickname is required');
+    }
+    const existing = await this.userRepo.findOneBy({ nickname: normalized });
+    if (!existing) {
+      throw new NotFoundException('nickname not found');
+    }
+    return existing.id;
   }
 
   async getUsers() {
-    const users = await this.userRepo.find({ order: { id: 'ASC' } });
-    return users.map((user) => user.id);
+    const users = await this.userRepo.find({ order: { nickname: 'ASC' } });
+    return users.map((user) => this.toAppUser(user));
   }
 
   async getRoomMembers(roomId: string, requesterUserId: string) {
@@ -499,12 +698,6 @@ export class ChatStoreService implements OnModuleInit {
     throw new NotFoundException(`room not found: ${roomId}`);
   }
 
-  private addFriendLink(userId: string, friendId: string) {
-    const set = this.friends.get(userId) ?? new Set<string>();
-    set.add(friendId);
-    this.friends.set(userId, set);
-  }
-
   private toChatMessage(row: MessageEntity): ChatMessage {
     return {
       id: row.id,
@@ -523,6 +716,14 @@ export class ChatStoreService implements OnModuleInit {
               dataUrl: row.fileDataUrl,
             }
           : undefined,
+    };
+  }
+
+  private toAppUser(user: UserEntity): AppUser {
+    return {
+      id: user.id,
+      email: user.email,
+      nickname: user.nickname,
     };
   }
 
@@ -548,54 +749,33 @@ export class ChatStoreService implements OnModuleInit {
     return Math.floor(parsed);
   }
 
+  private toFriendRequestDto(row: FriendRequestEntity): FriendRequestDto {
+    return {
+      id: row.id,
+      fromUserId: row.fromUserId,
+      toUserId: row.toUserId,
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+      respondedAt: row.respondedAt ? row.respondedAt.toISOString() : null,
+    };
+  }
+
   private async seedDummyData() {
-    const hasUsers = (await this.userRepo.count()) > 0;
-    if (hasUsers) {
-      return;
+    // Supabase 기반 인증 전환 이후에는 로컬 더미 사용자 시드를 생성하지 않는다.
+  }
+
+  private async assertProfileAvailable(
+    email: string,
+    nickname: string,
+    allowedUserId?: string,
+  ) {
+    const byEmail = await this.userRepo.findOneBy({ email });
+    if (byEmail && byEmail.id !== allowedUserId) {
+      throw new BadRequestException('email already used');
     }
-
-    await this.signupUser('alice');
-    await this.signupUser('bob');
-    await this.signupUser('charlie');
-
-    this.addFriendLink('alice', 'bob');
-    this.addFriendLink('bob', 'alice');
-    this.addFriendLink('alice', 'charlie');
-    this.addFriendLink('charlie', 'alice');
-
-    await this.createRoom('lobby', 'alice');
-    await this.addRoomMember('lobby', 'bob');
-    await this.addRoomMember('lobby', 'charlie');
-    await this.createRoom('project-alpha', 'alice');
-    await this.addRoomMember('project-alpha', 'bob');
-
-    await this.saveMessageIdempotent({
-      id: randomUUID(),
-      clientMsgId: randomUUID(),
-      roomId: 'lobby',
-      userId: 'alice',
-      text: 'Welcome to lobby',
-      sentAt: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-    });
-    await this.saveMessageIdempotent({
-      id: randomUUID(),
-      clientMsgId: randomUUID(),
-      roomId: 'lobby',
-      userId: 'bob',
-      text: 'Hi all',
-      sentAt: new Date(Date.now() - 1000 * 60 * 4).toISOString(),
-    });
-    await this.saveMessageIdempotent({
-      id: randomUUID(),
-      clientMsgId: randomUUID(),
-      roomId: 'project-alpha',
-      userId: 'alice',
-      text: 'Kickoff at 2pm',
-      sentAt: new Date(Date.now() - 1000 * 60 * 3).toISOString(),
-    });
-
-    await this.inviteToRoom('project-alpha', 'alice', 'charlie');
-
-    await this.getOrCreateDirectRoom('alice', 'bob');
+    const byNickname = await this.userRepo.findOneBy({ nickname });
+    if (byNickname && byNickname.id !== allowedUserId) {
+      throw new BadRequestException('nickname already used');
+    }
   }
 }
